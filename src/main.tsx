@@ -13,5 +13,11 @@ import './hero-carousel.css'
 import './brand-polish.css'
 import './mobile-optimization.css'
 import './guardian-exams-page.css'
+import './guardian-preorder.css'
+import './ai-marking.css'
+import './assessment-tools-menu.css'
+import './assessment-tools-page.css'
+import './whatsapp-chat-widget.css'
+import './marketplace-footer.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

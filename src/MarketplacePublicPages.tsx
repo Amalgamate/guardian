@@ -1,12 +1,15 @@
-import { Check, ChevronDown, CircleHelp, ArrowRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, ChevronDown, CircleHelp, ArrowRight, Sparkles, ShieldCheck, Target, BookOpenCheck, CalendarDays } from 'lucide-react'
+import { assessmentTools } from './data/assessmentTools'
 
-export type MarketplacePublicScreen = 'pricing' | 'how-it-works' | 'support' | 'plan-success'
+export type MarketplacePublicScreen = 'pricing' | 'how-it-works' | 'support' | 'plan-success' | 'assessment-tools'
 
 type Props = {
   screen: MarketplacePublicScreen
   selectedPlan: string
-  navigate: (screen: 'home' | 'catalogue' | 'detail' | 'pricing' | 'support') => void
+  navigate: (screen: 'home' | 'catalogue' | 'detail' | 'pricing' | 'support' | 'assessment-tools') => void
   choosePlan: (name: string) => void
+  activeTool: string
 }
 
 const plans = [
@@ -16,7 +19,10 @@ const plans = [
   { name: 'School', price: 'Let’s talk', period: '', description: 'Learning resources for your institution.', features: ['School and class workspaces', 'School-level reporting', 'Institutional access options'] },
 ]
 
-export default function MarketplacePublicPages({ screen, selectedPlan, navigate, choosePlan }: Props) {
+export default function MarketplacePublicPages({ screen, selectedPlan, navigate, choosePlan, activeTool }: Props) {
+  const [expandedTool, setExpandedTool] = useState(activeTool)
+  useEffect(() => { setExpandedTool(activeTool) }, [activeTool])
+  useEffect(() => { if (screen === 'assessment-tools' && activeTool) window.setTimeout(() => document.getElementById(`assessment-tool-${activeTool}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120) }, [screen, activeTool])
   if (screen === 'pricing') return <main className="public-info-page pricing-page">
     <div className="market-breadcrumb"><button onClick={() => navigate('home')}>Home</button><span>/</span><strong>Plans</strong></div>
     <section className="public-page-heading"><span className="market-eyebrow">LEARNING THAT FITS YOUR NEEDS</span><h1>Choose how you want to prepare.</h1><p>Start with individual papers or explore access for learners, families, teachers and schools.</p><small>Prices below are illustrative prototype values for founder review. No plan is activated and no payment is taken.</small></section>
@@ -27,8 +33,17 @@ export default function MarketplacePublicPages({ screen, selectedPlan, navigate,
   if (screen === 'how-it-works') return <main className="public-info-page">
     <div className="market-breadcrumb"><button onClick={() => navigate('home')}>Home</button><span>/</span><strong>How it works</strong></div>
     <section className="public-page-heading"><span className="market-eyebrow">YOUR LEARNING JOURNEY</span><h1>From finding a paper to knowing what to practise next.</h1><p>Guardian Exams brings learning resources and progress into one clear experience.</p></section>
-    <div className="journey-grid">{[{ n: '01', title: 'Find the right resource', text: 'Search by curriculum, level, grade, subject or exam type. Check formats, page counts and price before choosing.', action: 'Browse past papers', go: () => navigate('catalogue') }, { n: '02', title: 'Practise with purpose', text: 'Use a paper preview or an interactive practice resource. Marking guidance is shown when included.', action: 'See a sample paper', go: () => navigate('detail') }, { n: '03', title: 'Review your progress', text: 'Understand scores, see areas to revisit and connect the next practice step to your learning goals.', action: 'Explore learning resources', go: () => navigate('catalogue') }].map((item) => <article className="journey-card" key={item.n}><span className="journey-number">{item.n}</span><h2>{item.title}</h2><p>{item.text}</p><button className="market-text-link" onClick={item.go}>{item.action} <ArrowRight size={15}/></button></article>)}</div>
+    <div className="journey-grid">{[{ n: '01', title: 'Choose your exam paper', text: 'Browse by curriculum, grade, subject, year or exam type. Check what is included and add the right paper to your cart.', action: 'Browse past papers', go: () => navigate('catalogue') }, { n: '02', title: 'Checkout with M-PESA', text: 'Enter your Safaricom number to preview an STK payment prompt. Confirm the simulated payment to complete checkout.', action: 'Browse papers & checkout', go: () => navigate('catalogue') }, { n: '03', title: 'Access, practise & review', text: 'Open your paper from the learner library, practise interactively and review scores, marking guidance and useful next steps.', action: 'Explore learning resources', go: () => navigate('catalogue') }].map((item) => <article className="journey-card" key={item.n}><span className="journey-number">{item.n}</span><h2>{item.title}</h2><p>{item.text}</p>{item.n === '02' && <div className="journey-mpesa-mark"><img src="/assets/mpesa-logo.svg" alt="M-PESA"/><span>M-PESA-ready checkout</span></div>}<button className="market-text-link" onClick={item.go}>{item.action} <ArrowRight size={15}/></button></article>)}</div>
+    <p className="journey-payment-note">M-PESA checkout is simulated in this prototype. No payment is sent or processed.</p>
+    <section className="ai-marking-feature" aria-labelledby="ai-marking-title"><div className="ai-marking-copy"><span className="ai-marking-kicker"><Sparkles size={15}/> INTELLIGENT ASSESSMENT</span><h2 id="ai-marking-title">Fast feedback. Teacher-led decisions.</h2><p>Automarking handles clear answers quickly. AI-assisted review can help interpret written responses, spot learning patterns, and suggest useful next practice while teachers stay in control.</p><div className="ai-marking-steps"><div><span><Check size={15}/></span><p><strong>Auto-score objective answers</strong><small>Compare responses with the examiner-approved answer key and marking scheme.</small></p></div><div><span><Sparkles size={15}/></span><p><strong>Surface useful learning signals</strong><small>Highlight topics to revisit and propose targeted practice from the learner’s results.</small></p></div><div><span><ShieldCheck size={15}/></span><p><strong>Route uncertain work to a teacher</strong><small>Written answers and low-confidence matches stay reviewable before results are shared.</small></p></div></div><button className="ai-marking-cta" onClick={() => navigate('catalogue')}>Explore practice papers <ArrowRight size={15}/></button></div><div className="ai-marking-insight"><div className="ai-marking-chart-head"><span><Target size={16}/> Sample marking workflow</span><small>Illustrative data</small></div><div className="ai-marking-chart-layout"><div className="ai-marking-donut" role="img" aria-label="Illustrative marking workflow: 62 percent automatically scored, 26 percent AI-assisted review, and 12 percent teacher review"><div><strong>100%</strong><small>responses in the sample</small></div></div><div className="ai-marking-legend"><div><i className="auto"/><span>Auto-scored</span><b>62%</b></div><div><i className="assisted"/><span>AI-assisted review</span><b>26%</b></div><div><i className="teacher"/><span>Teacher review</span><b>12%</b></div></div></div><div className="ai-marking-insight-note"><Sparkles size={15}/><span><strong>Next-step insight</strong><small>“Review fractions” · suggested from missed questions in this sample.</small></span></div><small className="ai-marking-disclaimer">Concept preview only. The chart is illustrative; no live AI model or marking service is connected.</small></div></section>
     <div className="journey-note"><Check size={18}/><span><strong>Made for Kenyan learning contexts</strong><small>Browse sample CBC and 8-4-4 resources, with KSh pricing and familiar grade and form labels.</small></span></div>
+  </main>
+
+  if (screen === 'assessment-tools') return <main className="public-info-page assessment-tools-page">
+    <div className="market-breadcrumb"><button onClick={() => navigate('home')}>Home</button><span>/</span><strong>Assessment tools</strong></div>
+    <section className="public-page-heading"><span className="market-eyebrow">FOR TEACHERS & SCHOOLS</span><h1>Plan, assess and support learning.</h1><p>Assessment tools to help organise the term, build meaningful checks for learning, mark consistently and turn results into practical next steps.</p></section>
+    <div className="assessment-tools-grid">{assessmentTools.map((tool,index)=> <article className={`assessment-tool-card ${expandedTool===tool.id?'is-expanded':''}`} id={`assessment-tool-${tool.id}`} key={tool.id}><span className="assessment-tool-icon">{index===1?<CalendarDays size={20}/>:index===0||index===4?<BookOpenCheck size={20}/>:index===7?<Target size={20}/>:<Check size={20}/>}</span><span className="market-eyebrow">TOOL {String(index+1).padStart(2,'0')}</span><h2>{tool.label}</h2><p>{tool.summary}</p>{expandedTool===tool.id&&<div className="assessment-tool-preview"><strong>Workflow preview</strong><p>{tool.details}</p><ul>{tool.preview.map((item)=><li key={item}><Check size={14}/>{item}</li>)}</ul><small>Prototype concept · actions and records are simulated.</small></div>}<button className="market-text-link" onClick={()=>setExpandedTool(expandedTool===tool.id?'':tool.id)}>{expandedTool===tool.id?'Hide workflow':'Preview workflow'} <ArrowRight size={15}/></button></article>)}</div>
+    <div className="assessment-tools-footnote"><Sparkles size={18}/><span><strong>One connected teaching workflow</strong><small>Plan work → schedule checks → assign assessments → review marking → share clear progress insights.</small></span></div>
   </main>
 
   if (screen === 'support') return <main className="public-info-page support-page">

@@ -43,6 +43,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .stage-blue .stage-icon{background:#2457D6;color:#fff;box-shadow:0 2px 6px #2457D638}
 .stage-gold .stage-icon{background:#FFB938;color:#10243B;box-shadow:0 2px 6px #FFB93855}
 .stage-gold .stage-icon svg{stroke:#10243B}
+.stage-coral .stage-icon{background:#F45B5B;color:#fff;box-shadow:0 2px 6px #F45B5B38}
+.stage-indigo .stage-icon{background:#4F46E5;color:#fff;box-shadow:0 2px 6px #4F46E538}
 .vendor-note-icon{background:#11A88D;color:#fff;box-shadow:0 2px 6px #11A88D38}
 .cover-blue{background:#2457D6}.cover-teal{background:#087B70}.cover-purple{background:#10243B}.cover-gold{background:#B66D00}.cover-rose{background:#315FCB}
 .market-paper-card,.ws-card,.showcase-card{box-shadow:var(--shadow)}
