@@ -1,0 +1,24 @@
+.ws-whatsapp-card{margin-top:14px;padding:16px;background:#fff;border:1px solid #dcebe6;border-radius:8px;box-shadow:0 5px 16px #0e59400a}
+.ws-whatsapp-head{display:flex;align-items:flex-start;gap:11px}
+.ws-whatsapp-icon{width:40px;height:40px;display:grid;place-items:center;flex:none;border-radius:13px;background:#d8f7e8;color:#12885c;box-shadow:inset 0 0 0 1px #b8efd2}
+.ws-whatsapp-head>div{flex:1;min-width:0}
+.ws-whatsapp-kicker{font-size:9px;font-weight:800;letter-spacing:.9px;color:#16825a}
+.ws-whatsapp-head h3{margin:2px 0 4px;font:750 16px Manrope,Inter,sans-serif;color:#1d3b30}
+.ws-whatsapp-head p{margin:0;color:#74877f;font-size:11px;line-height:1.5}
+.ws-whatsapp-master{display:flex;align-items:center;gap:6px;color:#527564;font-size:10px;font-weight:700}
+.ws-whatsapp-master input,.ws-whatsapp-topics input{width:17px;height:17px;accent-color:#17895e}
+.ws-whatsapp-phone{display:grid;gap:6px;max-width:390px;margin:14px 0;color:#506b5d;font-size:10px;font-weight:700}
+.ws-whatsapp-phone input{height:39px;width:100%;border:1px solid #d7e5dc;border-radius:5px;padding:0 10px;color:#294b3b;background:#fff;font-size:12px}
+.ws-whatsapp-phone input:disabled{background:#f6f8f7;color:#9aa9a0}
+.ws-whatsapp-topics{display:grid;gap:2px}
+.ws-whatsapp-topics>strong{margin:0 0 4px;color:#475f52;font-size:10px}
+.ws-whatsapp-topics>label{min-height:42px;display:flex;align-items:center;gap:9px;padding:4px 7px;border-top:1px solid #edf3ef;color:#486052;font-size:11px}
+.ws-whatsapp-topics>label>span:nth-child(2){flex:1}
+.ws-whatsapp-topic-icon{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;color:#fff}
+.ws-whatsapp-topic-icon.tone-0{background:#2c9e71}.ws-whatsapp-topic-icon.tone-1{background:#f2a63a}.ws-whatsapp-topic-icon.tone-2{background:#4384ed}
+.ws-whatsapp-topics input:disabled{opacity:.45}
+.ws-baileys-status{display:flex;align-items:center;gap:9px;margin-top:11px;padding:10px;border:1px solid #e2eaf1;border-radius:6px;background:#f8fafc}
+.ws-baileys-icon{width:29px;height:29px;display:grid;place-items:center;flex:none;border-radius:9px;background:#e8eefb;color:#4869bd}
+.ws-baileys-status>span:nth-child(2){flex:1;min-width:0}.ws-baileys-status strong,.ws-baileys-status small{display:block}.ws-baileys-status strong{font-size:10px;color:#41566c}.ws-baileys-status small{margin-top:3px;font-size:9px;line-height:1.45;color:#8190a0}.ws-baileys-status>b{padding:4px 6px;border-radius:4px;background:#e9efff;color:#4564b4;font-size:8px;text-transform:uppercase;letter-spacing:.4px}
+.ws-whatsapp-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid #edf3ef}.ws-whatsapp-foot>span{display:flex;align-items:flex-start;gap:5px;color:#829188;font-size:9px;line-height:1.4}.ws-whatsapp-foot>span svg{flex:none;color:#16825a}.ws-whatsapp-foot .ws-button{flex:none}
+@media(max-width:720px){.ws-whatsapp-card{padding:13px}.ws-whatsapp-head{gap:8px}.ws-whatsapp-icon{width:36px;height:36px}.ws-whatsapp-head p{font-size:10px}.ws-whatsapp-foot{align-items:stretch;flex-direction:column}.ws-whatsapp-foot .ws-button{width:100%;min-height:39px}.ws-baileys-status{align-items:flex-start}}

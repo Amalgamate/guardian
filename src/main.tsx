@@ -11,5 +11,6 @@ import './role-preview.css'
 import './color-system.css'
 import './hero-carousel.css'
 import './brand-polish.css'
+import './mobile-optimization.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

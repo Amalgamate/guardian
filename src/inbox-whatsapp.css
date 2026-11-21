@@ -1,0 +1,10 @@
+.inbox-channel-picker{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:9px}
+.inbox-channel-picker>span{margin-right:3px;color:#728398;font-size:9px;font-weight:650}
+.inbox-channel-picker button{min-height:29px;padding:0 9px;display:inline-flex;align-items:center;gap:5px;border:1px solid #dfe6ed;border-radius:5px;background:#fff;color:#687b8e;font-size:9px;font-weight:650}
+.inbox-channel-picker button.selected{border-color:#b8c9fa;background:#eff3ff;color:#3157bd}
+.inbox-channel-picker button.whatsapp.selected{border-color:#b9e9cd;background:#ecfaf2;color:#167349}
+.inbox-channel-picker button svg{flex:none}
+.inbox-channel-badge{display:inline-flex;align-items:center;margin-left:7px;padding:2px 5px;border-radius:4px;background:#eef3ff;color:#4862a6;font-size:8px;font-weight:650;vertical-align:1px}
+.inbox-channel-badge.whatsapp{background:#e9f8ef;color:#16804f}
+.inbox-reply-form:has(.inbox-channel-picker) small{display:block;margin-top:7px}
+@media(max-width:600px){.inbox-channel-picker button{min-height:34px;padding:0 10px}.inbox-channel-picker>span{width:100%}}
