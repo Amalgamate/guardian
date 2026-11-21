@@ -5,9 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f5f7fa" />
     <meta name="description" content="The Guardian Exams — learning, practice papers and exam preparation." />
+    <link rel="icon" type="image/svg+xml" href="/assets/guardian-favicon.svg" />
     <title>The Guardian Exams</title>
+    <style>
+      #app-preloader{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:#f5f7fa;transition:opacity .28s ease,visibility .28s ease}
+      #app-preloader.is-hidden{opacity:0;visibility:hidden;pointer-events:none}
+      .app-preloader-card{display:grid;justify-items:center;gap:14px;color:#10243b;font:700 18px/1.2 Inter,Arial,sans-serif}
+      .app-preloader-mark{width:58px;height:58px;display:grid;place-items:center;border-radius:17px;background:linear-gradient(145deg,#3274ff,#2457d6);box-shadow:0 9px 22px #2457d644;animation:app-loader-bob 1.1s ease-in-out infinite alternate}
+      .app-preloader-mark svg{width:31px;height:31px;stroke:#fff;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+      .app-preloader-name i{color:#2457d6;font-style:normal}
+      .app-preloader-track{width:104px;height:4px;overflow:hidden;border-radius:8px;background:#dce6f6}
+      .app-preloader-track:after{content:"";display:block;width:42%;height:100%;border-radius:inherit;background:#16a58a;animation:app-loader-progress 1s ease-in-out infinite}
+      @keyframes app-loader-bob{to{transform:translateY(-4px)}}
+      @keyframes app-loader-progress{from{transform:translateX(-110%)}to{transform:translateX(250%)}}
+      @media(prefers-reduced-motion:reduce){.app-preloader-mark,.app-preloader-track:after{animation:none}}
+    </style>
   </head>
   <body>
+    <div id="app-preloader" role="status" aria-label="Loading Guardian Exams"><div class="app-preloader-card"><span class="app-preloader-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m2 9 10-5 10 5-10 5L2 9Z"/><path d="M6 11v5c3.4 2.7 8.6 2.7 12 0v-5M22 9v6"/></svg></span><span class="app-preloader-name">Guardian <i>Exams</i></span><span class="app-preloader-track" aria-hidden="true"></span></div></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

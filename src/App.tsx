@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ArrowRight, Bell, BookOpen, CheckCircle2, Check, ChevronDown, CircleHelp, GraduationCap, LayoutDashboard, LockKeyhole, ShoppingBag, ShoppingCart, Sparkles, UserRound, X } from 'lucide-react'
 import Marketplace from './Marketplace'
 import Workspace from './Workspace'
@@ -13,6 +13,15 @@ function Avatar({ initials, tone = 'blue', size = 'md', online = false, label }:
 }
 
 function App() {
+  useEffect(() => {
+    const preloader = document.getElementById('app-preloader')
+    if (!preloader) return
+    const fadeTimer = window.setTimeout(() => {
+      preloader.classList.add('is-hidden')
+      window.setTimeout(() => preloader.remove(), 300)
+    }, 320)
+    return () => window.clearTimeout(fadeTimer)
+  }, [])
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'info' | 'warning' | 'error' } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
