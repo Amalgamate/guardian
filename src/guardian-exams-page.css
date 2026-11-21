@@ -1,0 +1,40 @@
+.guardian-exams-page{max-width:1260px;min-width:0;margin:0 auto;padding:30px 36px 54px}
+.guardian-exams-hero{position:relative;isolation:isolate;min-height:340px;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(250px,.8fr);align-items:center;gap:30px;padding:42px clamp(25px,5vw,60px);overflow:hidden;border-radius:16px;background:linear-gradient(116deg,#1769f5 0%,#287ef1 62%,#40a4ef 100%);color:#fff;box-shadow:0 16px 36px #1a6df02a}
+.guardian-exams-hero:after{content:"";position:absolute;z-index:-1;width:520px;height:520px;right:-235px;top:-320px;border:1px solid #ffffff2b;border-radius:50%;box-shadow:0 0 0 46px #ffffff0a,0 0 0 92px #ffffff08}
+.guardian-exams-hero-copy{position:relative;z-index:1;max-width:620px}
+.guardian-exams-eyebrow{display:inline-flex;align-items:center;gap:8px;color:#eff6ff;font-size:10px;font-weight:800;letter-spacing:1.1px}
+.guardian-exams-eyebrow svg{color:#ffe66d}
+.guardian-exams-hero h1{margin:17px 0 10px;font:850 clamp(38px,5vw,58px)/1.06 Manrope,Inter,sans-serif;letter-spacing:-1.8px;color:#fff}
+.guardian-exams-hero-copy>p{max-width:540px;margin:0;color:#f0f6ff;font-size:16px;line-height:1.7}
+.guardian-exams-hero-actions{display:flex;align-items:center;gap:19px;margin-top:23px;flex-wrap:wrap}
+.guardian-exams-hero-actions .button{min-height:46px;padding:0 18px;gap:8px}
+.guardian-exams-secondary{display:inline-flex;align-items:center;gap:7px;padding:10px 0;border:0;background:none;color:#fff;font-size:13px;font-weight:700}
+.guardian-exams-secondary:hover{color:#ffe66d}
+.guardian-exams-proof{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;color:#e4efff;font-size:10px}
+.guardian-exams-proof span{display:inline-flex;align-items:center;gap:6px}.guardian-exams-proof svg{color:#b3f2d4}
+.guardian-exams-hero-art{position:relative;justify-self:center;width:min(100%,290px);height:235px;display:grid;place-items:center}
+.guardian-exams-orbit{position:absolute;width:245px;height:135px;border:1px solid #ffffff43;border-radius:50%;transform:rotate(-27deg)}
+.guardian-exams-orbit.orbit-b{width:215px;height:180px;transform:rotate(32deg);border-color:#ffffff2b}
+.guardian-exams-cap{width:126px;height:126px;display:grid;place-items:center;border:1px solid #ffffff75;border-radius:37px;background:linear-gradient(145deg,#ffffff36,#ffffff0c);color:#fff;box-shadow:0 20px 45px #0a45aa40,inset 0 1px 0 #ffffff70;transform:rotate(-7deg)}
+.guardian-exams-cap svg{filter:drop-shadow(0 5px 8px #10469b45)}
+.guardian-exams-art-dot{position:absolute;width:15px;height:15px;border:3px solid #fff;border-radius:50%;background:#ffe66d;box-shadow:0 0 0 6px #ffe66d38}
+.guardian-exams-art-dot.dot-a{right:28px;top:36px}.guardian-exams-art-dot.dot-b{left:25px;bottom:40px;width:10px;height:10px;background:#52d6af;box-shadow:0 0 0 5px #52d6af32}
+.guardian-exams-upcoming{display:grid;grid-template-columns:46px minmax(0,1fr) auto;align-items:center;gap:14px;margin-top:20px;padding:19px 22px;border:1px solid #f0d477;border-radius:12px;background:linear-gradient(105deg,#fff8dd,#fff1b4);box-shadow:0 8px 20px #a979080d}
+.guardian-upcoming-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:#ffd84c;color:#775600;box-shadow:0 5px 12px #bd8b1530}
+.guardian-upcoming-copy{min-width:0}.guardian-upcoming-kicker{color:#8a6500;font-size:9px;font-weight:850;letter-spacing:1px}
+.guardian-upcoming-copy h2{margin:4px 0;color:#173452;font:750 19px Manrope,Inter,sans-serif}
+.guardian-upcoming-copy p{margin:0;color:#735f2f;font-size:11px;line-height:1.5}
+.guardian-upcoming-button{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:0 15px;border:1px solid #e7bd34;border-radius:999px;background:#ffd84c;color:#533c00;font-size:11px;font-weight:800;box-shadow:0 4px 10px #a779151c;white-space:nowrap}
+.guardian-upcoming-button:hover{background:#ffce25}
+.guardian-exams-sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:22px}
+.guardian-exams-sections article{min-width:0;padding:20px;background:#fff;border:1px solid #e2eaf2;border-radius:10px;box-shadow:0 5px 18px #10243b08}
+.guardian-exams-section-icon{width:41px;height:41px;display:grid;place-items:center;margin-bottom:13px;border-radius:13px;color:#fff;box-shadow:0 6px 13px #162d461a}
+.guardian-exams-section-icon.blue{background:linear-gradient(145deg,#4188ff,#2457d6)}.guardian-exams-section-icon.teal{background:linear-gradient(145deg,#2bc99d,#10886f)}
+.guardian-exams-sections .market-eyebrow{font-size:9px}
+.guardian-exams-sections h2{margin:6px 0 7px;color:#18324b;font:750 18px Manrope,Inter,sans-serif}
+.guardian-exams-sections p{min-height:48px;margin:0 0 14px;color:#687c91;font-size:11px;line-height:1.6}
+.guardian-exams-sections .market-text-link{color:#2457d6;font-size:11px}
+.guardian-exams-prototype-note{margin:15px 2px 0;color:#8b98a6;font-size:9px;line-height:1.45}
+@media(max-width:900px){.guardian-exams-page{padding-left:24px;padding-right:24px}.guardian-exams-hero{grid-template-columns:minmax(0,1fr) minmax(190px,.65fr);gap:15px;padding:32px 29px}.guardian-exams-hero-art{transform:scale(.88)}}
+@media(max-width:760px){.guardian-exams-page{padding:18px 16px 38px}.guardian-exams-hero{grid-template-columns:1fr;gap:8px;padding:27px 23px 20px}.guardian-exams-hero h1{font-size:clamp(36px,9vw,48px)}.guardian-exams-hero-copy>p{font-size:14px}.guardian-exams-hero-art{width:100%;height:140px;transform:none}.guardian-exams-cap{width:88px;height:88px;border-radius:27px}.guardian-exams-cap svg{width:56px;height:56px}.guardian-exams-orbit{width:185px;height:98px}.guardian-exams-orbit.orbit-b{width:170px;height:120px}.guardian-exams-upcoming{grid-template-columns:38px minmax(0,1fr);gap:10px;padding:14px}.guardian-upcoming-icon{width:36px;height:36px;border-radius:11px}.guardian-upcoming-copy h2{font-size:16px}.guardian-upcoming-copy p{font-size:10px}.guardian-upcoming-button{grid-column:1/-1;width:100%;min-height:42px}.guardian-exams-sections{grid-template-columns:1fr;gap:10px;margin-top:14px}.guardian-exams-sections article{padding:16px}.guardian-exams-sections p{min-height:0}.guardian-exams-proof{gap:10px 14px;font-size:9px}}
+@media(max-width:430px){.guardian-exams-page{padding-left:10px;padding-right:10px}.guardian-exams-hero{padding:23px 18px 16px;border-radius:13px}.guardian-exams-hero h1{font-size:35px;letter-spacing:-1.2px}.guardian-exams-hero-actions{align-items:stretch;flex-direction:column;gap:8px;margin-top:17px}.guardian-exams-hero-actions .button{width:100%}.guardian-exams-secondary{justify-content:center;min-height:34px}.guardian-exams-upcoming{grid-template-columns:32px minmax(0,1fr);padding:12px}.guardian-upcoming-icon{width:31px;height:31px}.guardian-upcoming-copy h2{font-size:14px}.guardian-exams-proof{font-size:8px}}
