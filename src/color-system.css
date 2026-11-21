@@ -1,0 +1,74 @@
+/* Shared palette and semantic color roles for the web, PWA and Flutter handoff. */
+:root{
+  --navy:#10243B;
+  --blue:#2457D6;
+  --teal:#11A88D;
+  --amber:#FFB938;
+  --canvas:#F8FAFD;
+  --surface:#FFFFFF;
+  --border:#E2E9F1;
+  --text:#172B42;
+  --secondary:#566A83;
+  --muted:#75869B;
+  --shadow:0 4px 14px rgba(16,36,59,.06);
+  --accent-yellow:var(--amber);
+}
+:root,body{color:var(--text);background:var(--canvas)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #2457D655;outline-offset:2px}
+.button-primary,.ws-button.ws-primary,.auth-submit,.inbox-primary,.market-add-btn{background:#2457D6;color:#fff;box-shadow:0 2px 5px #2457D626}
+.button-primary:hover:not(:disabled),.ws-button.ws-primary:hover,.auth-submit:hover,.inbox-primary:hover:not(:disabled),.market-add-btn:hover{background:#1E4CC0}
+.nav-item.active{position:relative;background:#EAF0FF;color:#2457D6;box-shadow:inset 3px 0 #2457D6}
+.prototype-pill{background:#EDF3FF;border-color:#DCE6FA;color:#3157A5}
+.metric-card,.ws-metric{background:#fff;border-top:3px solid #2457D6;box-shadow:var(--shadow)}
+.metric-card:nth-child(2),.ws-metric:nth-child(2){border-top-color:#11A88D}
+.metric-card:nth-child(3),.ws-metric:nth-child(3){border-top-color:#FFB938}
+.metric-card:nth-child(4),.ws-metric:nth-child(4){border-top-color:#10243B}
+.kpi-blue{background:#E8F0FF}.kpi-green{background:#E4F7F1}.kpi-amber{background:#FFF4D9}
+.dashboard-kpi{border:1px solid #fff;box-shadow:0 2px 8px #10243b0d}
+.chart-column i{background:#2457D6}.chart-column:nth-child(2n) i{background:#11A88D}
+.icon-tone-0{--icon-halo:#2457D633;background:#2457D6}
+.icon-tone-1{--icon-halo:#11A88D38;background:#11A88D}
+.icon-tone-2{--icon-halo:#FFB93855;background:#FFB938}
+.icon-tone-3{--icon-halo:#10243B30;background:#10243B}
+.icon-tone-4{--icon-halo:#2457D633;background:#315FCB}
+.icon-circle{box-shadow:0 2px 7px #10243b20,0 0 0 4px var(--icon-halo)}
+.icon-circle.icon-tone-2 svg{color:#10243B;stroke:#10243B}
+.ws-metric strong{color:#10243B}
+.ws-circle-icon,.ws-paper-icon,.ws-exam-start-icon{background:#2457D6;color:#fff;box-shadow:0 2px 7px #2457D633}
+.ws-circle-icon svg,.ws-paper-icon svg,.ws-exam-start-icon svg{stroke:#fff}
+.ws-circle-icon.amber{background:#FFB938;color:#10243B;box-shadow:0 2px 7px #FFB93855}
+.ws-circle-icon.amber svg{stroke:#10243B}
+.ws-bar-row>i>b,.ws-result-bars i>b{background:#2457D6}
+.stage-teal .stage-icon{background:#11A88D;color:#fff;box-shadow:0 2px 6px #11A88D38}
+.stage-blue .stage-icon{background:#2457D6;color:#fff;box-shadow:0 2px 6px #2457D638}
+.stage-gold .stage-icon{background:#FFB938;color:#10243B;box-shadow:0 2px 6px #FFB93855}
+.stage-gold .stage-icon svg{stroke:#10243B}
+.vendor-note-icon{background:#11A88D;color:#fff;box-shadow:0 2px 6px #11A88D38}
+.cover-blue{background:#2457D6}.cover-teal{background:#087B70}.cover-purple{background:#10243B}.cover-gold{background:#B66D00}.cover-rose{background:#315FCB}
+.market-paper-card,.ws-card,.showcase-card{box-shadow:var(--shadow)}
+.market-paper-card:hover,.showcase-card:hover{border-color:#B8C9EA;box-shadow:0 7px 18px #10243b14}
+.ws-nav-item.selected{background:#EAF0FF;color:#2457D6;box-shadow:inset 3px 0 #2457D6}
+.ws-status.status-approved,.ws-status.status-published{background:#E4F7F1;color:#08745F}
+.ws-status.status-needs-review,.ws-status.status-pending{background:#FFF4D9;color:#805400}
+.ws-status.status-rejected{background:#FBE8E9;color:#A9323E}
+.result-donut{background:conic-gradient(#11A88D 0 70%,#FFB938 70% 90%,#E2E9F1 90% 100%)}
+.marketplace-shell{--market-navy:#10243B;--market-blue:#2457D6;--market-teal:#11A88D;--market-gold:#FFB938}
+.market-eyebrow,.ws-kicker{color:#2457D6}
+.guardian-topbar{background:#1769F5;color:#fff;box-shadow:0 2px 8px #1459dc38}
+.guardian-topbar-inner{display:grid;grid-template-columns:auto minmax(0,1fr) auto;color:#fff;gap:24px}
+.guardian-topbar-inner>.guardian-exam-label{margin:0;color:#fff;font-size:13px;font-weight:750;white-space:nowrap}
+.guardian-announcement-window{min-width:0;overflow:hidden;position:relative;mask-image:linear-gradient(90deg,transparent,#000 3%,#000 97%,transparent)}
+.guardian-announcement-track{width:max-content;display:flex;align-items:center;animation:guardian-announcement-loop 30s linear infinite;will-change:transform}
+.guardian-announcement-group{display:flex;align-items:center;flex:none;gap:clamp(24px,4vw,58px);padding-right:clamp(24px,4vw,58px)}
+.guardian-marquee-item{display:inline-flex;align-items:center;gap:10px;color:#fff;font-size:13px;font-weight:650;white-space:nowrap}
+.guardian-marquee-item>i{display:block;width:9px;height:9px;flex:none;border-radius:50%;background:#FFE66D;box-shadow:0 0 0 4px #ffe66d45}
+.guardian-marquee-separator{color:#FFE66D;font-size:18px;line-height:1}
+.guardian-delivery-note svg{color:#FFE66D;flex:none}
+.guardian-delivery-note b{font-weight:750}
+.guardian-topbar-inner button{display:flex;align-items:center;gap:5px;padding:0;border:0;background:none;color:#fff;font-size:12px;font-weight:800;white-space:nowrap}
+.guardian-topbar-inner button:hover{color:#dceaff}
+.guardian-announcement-window:hover .guardian-announcement-track{animation-play-state:paused}
+@keyframes guardian-announcement-loop{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media(max-width:760px){.guardian-topbar{height:42px}.guardian-topbar-inner{grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:0 12px}.guardian-topbar-inner>.guardian-exam-label{font-size:11px}.guardian-marquee-item{font-size:11px;gap:8px}.guardian-marquee-item>i{width:7px;height:7px}.guardian-announcement-track{animation-duration:24s}.guardian-announcement-group{gap:25px;padding-right:25px}.guardian-topbar-inner button{font-size:10px}}
+@media(max-width:420px){.guardian-topbar-inner{grid-template-columns:minmax(0,1fr) auto;gap:8px}.guardian-topbar-inner>.guardian-exam-label{font-size:10px}.guardian-topbar-inner button{font-size:0;gap:0}.guardian-topbar-inner button svg{width:18px;height:18px}.guardian-marquee-item{font-size:10px}.guardian-announcement-track{animation-duration:22s}}
+@media(prefers-reduced-motion:reduce){.guardian-announcement-track{animation:none}*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}}

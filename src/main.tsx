@@ -1,0 +1,15 @@
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import App from './App'
+import './styles.css'
+import './styles-personalization.css'
+import './styles-expanded.css'
+import './marketplace.css'
+import './marketplace-extra.css'
+import './feedback.css'
+import './role-preview.css'
+import './color-system.css'
+import './hero-carousel.css'
+import './brand-polish.css'
+
+createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
