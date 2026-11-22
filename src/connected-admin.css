@@ -17,3 +17,20 @@
 .ws-institution-app-actions .ws-danger{border-color:#f0d2d2;background:#fff7f7;color:#b54242}
 .ws-institution-directory-heading{margin-top:20px}
 @media(max-width:700px){.ws-institution-application-queue{padding:12px}.ws-institution-app-contact{grid-template-columns:1fr}.ws-institution-app-actions{align-items:stretch;flex-direction:column}.ws-institution-app-actions>div{display:grid;grid-template-columns:1fr 1.4fr}.ws-institution-application-top{flex-direction:column}}
+.ws-admin-heading-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ws-admin-access-form{display:grid;gap:12px;padding:16px;border:1px solid #cfddf5;border-radius:8px;background:#f7f9ff}
+.ws-admin-access-heading,.ws-admin-access-heading>span,.ws-admin-access-heading>div{display:flex;align-items:center;gap:8px}
+.ws-admin-access-heading{justify-content:space-between}
+.ws-admin-access-heading>span{color:#2457d6}.ws-admin-access-heading strong{color:#27425d;font-size:13px}
+.ws-admin-access-heading>div{padding:3px;border-radius:6px;background:#edf2fb}
+.ws-admin-access-heading>div button{min-height:28px;padding:0 10px;border:0;border-radius:4px;background:transparent;color:#637890;font-size:10px;font-weight:700}
+.ws-admin-access-heading>div button.selected{background:#fff;color:#2457d6;box-shadow:0 1px 4px #10243b15}
+.ws-admin-access-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.ws-admin-access-fields label{display:grid;gap:5px;color:#425a73;font-size:11px;font-weight:650}
+.ws-admin-access-fields input,.ws-admin-access-fields select,.ws-admin-invite-link input{width:100%;min-width:0;height:38px;padding:0 10px;border:1px solid #d9e2ee;border-radius:5px;background:#fff;color:#2c435c;font:12px Inter,sans-serif}
+.ws-admin-access-help{color:#7c8da0;font-size:10px;line-height:1.45}
+.ws-admin-access-error,.ws-admin-access-notice{margin:0;padding:9px 11px;border-radius:5px;font-size:11px;line-height:1.45}
+.ws-admin-access-error{border:1px solid #efd0d0;background:#fff7f7;color:#a83e3e}.ws-admin-access-notice{border:1px solid #ccebdd;background:#f2fbf7;color:#28725e}
+.ws-admin-invite-link{display:flex;gap:8px}.ws-admin-invite-link .ws-button{flex:none}
+.ws-admin-access-submit{display:flex;justify-content:flex-end}
+@media(max-width:700px){.ws-admin-heading-actions{width:100%}.ws-admin-access-fields{grid-template-columns:1fr}.ws-admin-invite-link{align-items:stretch;flex-direction:column}.ws-admin-access-submit .ws-button{width:100%}}

@@ -8,6 +8,7 @@ import { createDatabase } from './db.mjs'
 import { resendReady, sendGuardianOtp, sendGuardianOrderReceipt, sendGuardianWelcome } from './email.mjs'
 import { mobileSasaReady, sendGuardianOtpSms, sendGuardianPaymentReceiptSms } from './sms.mjs'
 import { darajaConfig, DarajaRequestError, initiateStkPush, normalizeMpesaPhone } from './daraja.mjs'
+import { handleAcademicStructureRequest } from './academicStructureRoutes.mjs'
 
 const scrypt = promisify(scryptCallback)
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -349,28 +350,92 @@ async function router(request, response) {
 
   if (method === 'GET' && path === '/api/health') return sendJson(response, 200, { status: 'ok', service: 'guardian-auth-api', time: now() })
 
-  if (method === 'POST' && path === '/api/institution-applications') {
-    rateLimit(request, 'institution-application', 5, 60_000)
-    const text = (value, max) => typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, max) : ''
-    const institutionName = text(payload.institutionName, 180)
-    const institutionType = ['school', 'college', 'other'].includes(payload.institutionType) ? payload.institutionType : 'school'
-    const registrationNumber = text(payload.registrationNumber, 100)
-    const county = text(payload.county, 100)
-    const town = text(payload.town, 100)
-    const physicalAddress = text(payload.physicalAddress, 240) || null
-    const contactName = text(payload.contactName, 160)
-    const contactRole = text(payload.contactRole, 100)
-    const contactEmail = normalizeEmail(payload.contactEmail)
-    const contactPhone = normalizePhone(payload.contactPhone)
-    const notes = typeof payload.notes === 'string' ? payload.notes.trim().slice(0, 2000) || null : null
-    if (institutionName.length < 2 || registrationNumber.length < 2 || !county || !town || contactName.length < 2 || !contactRole) fail(400, 'INSTITUTION_APPLICATION_REQUIRED', 'Complete the institution name, registration number, location and representative details.')
-    if (!contactEmail || !emailPattern.test(contactEmail)) fail(400, 'INSTITUTION_APPLICATION_EMAIL_INVALID', 'Enter a valid representative email address.')
-    if (!contactPhone || !phonePattern.test(contactPhone)) fail(400, 'INSTITUTION_APPLICATION_PHONE_INVALID', 'Enter a valid Kenyan phone number.')
-    const duplicate = await prepare(`SELECT id FROM institution_applications WHERE status='pending' AND (LOWER(registration_number)=LOWER(?) OR contact_email=?) LIMIT 1`).get(registrationNumber, contactEmail)
-    if (duplicate) fail(409, 'INSTITUTION_APPLICATION_EXISTS', 'A pending application already exists for this registration number or email address.')
-    const application = await prepare(`INSERT INTO institution_applications(institution_name,institution_type,registration_number,county,town,physical_address,contact_name,contact_role,contact_email,contact_phone,notes)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id,status,created_at AS "createdAt"`).get(institutionName, institutionType, registrationNumber, county, town, physicalAddress, contactName, contactRole, contactEmail, contactPhone, notes)
-    return sendJson(response, 201, { application, message: 'School access request received. Our team will review the details and contact the representative.' })
+  if (await handleAcademicStructureRequest({ request, response, url, path, method, payload, db, prepare, getAuth, requireRole, audit, now, sendJson, fail })) return
+
+  if (method === 'GET' && path === '/api/public/cms-settings') {
+    const row = await prepare(`SELECT settings FROM admin_cms_settings WHERE setting_key='public_homepage'`).get()
+    return sendJson(response, 200, { settings: row?.settings ?? null })
+  }
+
+  if (path === '/api/admin/cms-settings' && (method === 'GET' || method === 'PUT')) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (method === 'GET') {
+      const row = await prepare(`SELECT settings,updated_at AS "updatedAt" FROM admin_cms_settings WHERE setting_key='public_homepage'`).get()
+      return sendJson(response, 200, { settings: row?.settings ?? null, updatedAt: row?.updatedAt ?? null })
+    }
+    const supplied = payload?.settings
+    if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied)) fail(400, 'CMS_SETTINGS_INVALID', 'Provide homepage content settings.')
+    const settings = {
+      releaseTitle: typeof supplied.releaseTitle === 'string' ? supplied.releaseTitle.trim().slice(0, 120) : '',
+      announcementEnabled: supplied.announcementEnabled === true,
+      heroHeading: typeof supplied.heroHeading === 'string' ? supplied.heroHeading.trim().slice(0, 140) : '',
+      heroSupport: typeof supplied.heroSupport === 'string' ? supplied.heroSupport.trim().slice(0, 260) : '',
+    }
+    if (!settings.releaseTitle || !settings.heroHeading || !settings.heroSupport) fail(400, 'CMS_SETTINGS_REQUIRED', 'Add an announcement title, homepage heading and supporting text.')
+    const saved = await prepare(`INSERT INTO admin_cms_settings(setting_key,settings,updated_by,updated_at)
+      VALUES('public_homepage',?::jsonb,?,?) ON CONFLICT(setting_key) DO UPDATE SET settings=EXCLUDED.settings,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at
+      RETURNING settings,updated_at AS "updatedAt"`).get(JSON.stringify(settings), auth.user.id, now())
+    await audit('admin.cms_settings_updated', null, auth.user.id)
+    return sendJson(response, 200, { settings: saved.settings, updatedAt: saved.updatedAt, message: 'Website copy saved.' })
+  }
+
+  if (path === '/api/admin/subscription-plans' && (method === 'GET' || method === 'PUT')) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const listPlans = () => prepare(`SELECT id,name,description,price_kes AS "priceKes",billing_interval AS "billingInterval",status,features,created_at AS "createdAt",updated_at AS "updatedAt"
+      FROM subscription_plans ORDER BY created_at,id`).all()
+    if (method === 'GET') return sendJson(response, 200, { plans: await listPlans() })
+    if (!Array.isArray(payload?.plans) || payload.plans.length > 100) fail(400, 'SUBSCRIPTION_PLANS_INVALID', 'Provide up to 100 subscription plans.')
+    const plans = payload.plans.map((plan) => {
+      const name = typeof plan?.name === 'string' ? plan.name.trim().slice(0, 100) : ''
+      const description = typeof plan?.description === 'string' ? plan.description.trim().slice(0, 1000) : ''
+      const interval = ['month', 'year', 'one_time'].includes(plan?.billingInterval) ? plan.billingInterval : ''
+      const status = ['draft', 'active', 'archived'].includes(plan?.status) ? plan.status : ''
+      const price = plan?.priceKes === null || plan?.priceKes === '' ? null : Number(plan?.priceKes)
+      const features = Array.isArray(plan?.features) ? plan.features.filter((value) => typeof value === 'string').map((value) => value.trim().slice(0, 160)).filter(Boolean).slice(0, 30) : null
+      if (!name || !interval || !status || (price !== null && (!Number.isFinite(price) || price < 0 || price > 10000000)) || !features || features.length !== (plan?.features?.length ?? 0)) fail(400, 'SUBSCRIPTION_PLAN_INVALID', 'Each plan needs a name, valid price, billing interval, status and text-only features.')
+      return { id: /^[0-9a-f-]{36}$/i.test(plan.id ?? '') ? plan.id : randomUUID(), name, description, price, interval, status, features }
+    })
+    if (new Set(plans.map((plan) => plan.name.toLowerCase())).size !== plans.length) fail(400, 'SUBSCRIPTION_PLAN_DUPLICATE', 'Plan names must be unique.')
+    await db.transaction(async (tx) => {
+      const ids = plans.map((plan) => plan.id)
+      if (ids.length) await tx.query('DELETE FROM subscription_plans WHERE NOT (id = ANY($1::uuid[]))', [ids])
+      else await tx.query('DELETE FROM subscription_plans')
+      for (const plan of plans) await tx.query(`INSERT INTO subscription_plans(id,name,description,price_kes,billing_interval,status,features,created_by,updated_by,created_at,updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$8,$9,$9) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,price_kes=EXCLUDED.price_kes,
+        billing_interval=EXCLUDED.billing_interval,status=EXCLUDED.status,features=EXCLUDED.features,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at`,
+      [plan.id, plan.name, plan.description, plan.price, plan.interval, plan.status, JSON.stringify(plan.features), auth.user.id, now()])
+    })
+    await audit('admin.subscription_plans_updated', null, auth.user.id, { count: plans.length })
+    return sendJson(response, 200, { plans: await listPlans(), message: 'Subscription plan definitions saved.' })
+  }
+
+  if (method === 'GET' && ['/api/admin/assessments', '/api/admin/marketplace-orders', '/api/admin/question-bank'].includes(path)) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (path === '/api/admin/assessments') {
+      const assessments = await prepare(`SELECT a.id,a.title,a.assessment_mode AS mode,a.status,a.join_code AS "joinCode",a.created_at AS "createdAt",a.published_at AS "publishedAt",
+        i.name AS "institutionName",u.full_name AS "teacherName",COUNT(DISTINCT q.id)::int AS "questionCount",COUNT(DISTINCT t.id)::int AS "attemptCount",
+        ROUND(AVG(CASE WHEN t.status='published' AND t.maximum_score>0 THEN (t.auto_score/t.maximum_score)*100 END),1) AS "averageScorePercent"
+        FROM assessments a JOIN institutions i ON i.id=a.institution_id JOIN users u ON u.id=a.teacher_user_id
+        LEFT JOIN assessment_questions q ON q.assessment_id=a.id LEFT JOIN assessment_attempts t ON t.assessment_id=a.id
+        GROUP BY a.id,i.name,u.full_name ORDER BY a.updated_at DESC LIMIT 500`).all()
+      return sendJson(response, 200, { assessments })
+    }
+    if (path === '/api/admin/question-bank') {
+      const questions = await prepare(`SELECT q.id,q.prompt,q.question_type AS "questionType",q.options,q.marks,q.created_at AS "createdAt",a.id AS "assessmentId",a.title AS "assessmentTitle",
+        i.name AS "institutionName",u.full_name AS "teacherName" FROM assessment_questions q JOIN assessments a ON a.id=q.assessment_id
+        JOIN institutions i ON i.id=a.institution_id JOIN users u ON u.id=a.teacher_user_id ORDER BY q.created_at DESC,q.position LIMIT 1000`).all()
+      return sendJson(response, 200, { questions, source: 'assessment_questions', independentlyReusable: false })
+    }
+    const orders = await prepare(`SELECT o.id,o.status,o.total_kes AS "totalKes",o.payment_method AS "paymentMethod",o.payment_reference AS "paymentReference",
+      o.is_simulated_payment AS "isSimulatedPayment",o.created_at AS "createdAt",o.paid_at AS "paidAt",u.full_name AS "buyerName",u.email AS "buyerEmail",
+      COALESCE(json_agg(json_build_object('title',oi.title_snapshot,'unitPriceKes',oi.unit_price_kes,'sellerAmountKes',oi.seller_amount_kes,'platformAmountKes',oi.platform_amount_kes))
+        FILTER (WHERE oi.id IS NOT NULL),'[]'::json) AS items
+      FROM marketplace_orders o JOIN users u ON u.id=o.buyer_user_id LEFT JOIN marketplace_order_items oi ON oi.order_id=o.id
+      GROUP BY o.id,u.full_name,u.email ORDER BY o.created_at DESC LIMIT 1000`).all()
+    return sendJson(response, 200, { orders })
   }
 
   if (method === 'GET' && path === '/api/marketplace/payment-options') {
