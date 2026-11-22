@@ -1,0 +1,10 @@
+.ws-nav-item{min-height:46px;gap:10px}
+.ws-nav-icon{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;box-shadow:0 3px 8px #10243b1c;transition:transform .16s,box-shadow .16s}
+.ws-nav-icon svg{color:#fff;stroke:currentColor}
+.ws-nav-item:hover .ws-nav-icon{transform:scale(1.07);box-shadow:0 5px 11px #10243b26}
+.ws-nav-icon.tone-blue{background:#347cff}
+.ws-nav-icon.tone-teal{background:#12ae91}
+.ws-nav-icon.tone-violet{background:#8056e8}
+.ws-nav-icon.tone-coral{background:#eb6673}
+.ws-nav-icon.tone-gold{background:#e9a23b}
+@media(max-width:700px){.ws-nav-item{min-height:45px}.ws-nav-icon{width:29px;height:29px}}
