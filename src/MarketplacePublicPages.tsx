@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react'
-import { Check, ChevronDown, CircleHelp, ArrowRight, Sparkles, ShieldCheck, Target, BookOpenCheck, CalendarDays } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Check, ChevronDown, CircleHelp, ArrowRight, Sparkles, ShieldCheck, Target, BookOpenCheck, CalendarDays, Building2, Send, MapPin } from 'lucide-react'
 import { assessmentTools } from './data/assessmentTools'
+import { submitInstitutionApplication, type InstitutionApplicationInput } from './institutionApi'
+import './institution-application.css'
 
-export type MarketplacePublicScreen = 'pricing' | 'how-it-works' | 'support' | 'plan-success' | 'assessment-tools'
+export type MarketplacePublicScreen = 'pricing' | 'how-it-works' | 'support' | 'plan-success' | 'assessment-tools' | 'school-access'
 
 type Props = {
   screen: MarketplacePublicScreen
   selectedPlan: string
-  navigate: (screen: 'home' | 'catalogue' | 'detail' | 'pricing' | 'support' | 'assessment-tools') => void
+  navigate: (screen: 'home' | 'catalogue' | 'detail' | 'pricing' | 'support' | 'assessment-tools' | 'school-access') => void
   choosePlan: (name: string) => void
   activeTool: string
 }
@@ -21,12 +23,39 @@ const plans = [
 
 export default function MarketplacePublicPages({ screen, selectedPlan, navigate, choosePlan, activeTool }: Props) {
   const [expandedTool, setExpandedTool] = useState(activeTool)
+  const [schoolApplication, setSchoolApplication] = useState<InstitutionApplicationInput>({ institutionName: '', institutionType: 'school', registrationNumber: '', county: '', town: '', physicalAddress: '', contactName: '', contactRole: '', contactEmail: '', contactPhone: '', notes: '' })
+  const [schoolSubmitting, setSchoolSubmitting] = useState(false)
+  const [schoolApplicationId, setSchoolApplicationId] = useState('')
+  const [schoolError, setSchoolError] = useState('')
   useEffect(() => { setExpandedTool(activeTool) }, [activeTool])
   useEffect(() => { if (screen === 'assessment-tools' && activeTool) window.setTimeout(() => document.getElementById(`assessment-tool-${activeTool}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120) }, [screen, activeTool])
+  const updateSchoolApplication = <K extends keyof InstitutionApplicationInput>(field: K, value: InstitutionApplicationInput[K]) => setSchoolApplication((current) => ({ ...current, [field]: value }))
+  const submitSchoolApplication = async (event: FormEvent) => {
+    event.preventDefault()
+    setSchoolSubmitting(true)
+    setSchoolError('')
+    try {
+      const result = await submitInstitutionApplication(schoolApplication)
+      setSchoolApplicationId(result.application?.id ?? '')
+    } catch (reason) {
+      setSchoolError(reason instanceof Error ? reason.message : 'Could not submit the school access request.')
+    } finally {
+      setSchoolSubmitting(false)
+    }
+  }
+  if (screen === 'school-access') return <main className="public-info-page school-access-page">
+    <div className="market-breadcrumb"><button onClick={() => navigate('home')}>Home</button><span>/</span><button onClick={() => navigate('pricing')}>Plans</button><span>/</span><strong>School access</strong></div>
+    <section className="public-page-heading"><span className="market-eyebrow"><Building2 size={14}/> FOR SCHOOLS & INSTITUTIONS</span><h1>Request school access.</h1><p>Share your institution and representative details. Our team will review the application and contact you about setting up your school workspace.</p></section>
+    {schoolApplicationId ? <section className="school-application-success" role="status"><span><Check size={20}/></span><div><h2>Application received</h2><p>Your school access request has been sent for administrator review. Keep this reference for follow-up: <strong>{schoolApplicationId.slice(0, 8).toUpperCase()}</strong>.</p><small>After approval, our admin team will contact you to arrange your School admin account and institution workspace.</small></div><button className="button button-secondary" onClick={() => navigate('home')}>Return to Guardian Exams <ArrowRight size={14}/></button></section> : <form className="school-application-form" onSubmit={submitSchoolApplication}>
+      <section className="school-application-section"><div className="school-form-section-title"><span>01</span><div><h2>Institution details</h2><p>Use the official institution details shown on your registration documents.</p></div></div><div className="school-form-grid"><label>Institution or school name<input required maxLength={180} value={schoolApplication.institutionName} onChange={(event) => updateSchoolApplication('institutionName', event.target.value)} placeholder="e.g. Greenfield Academy" autoComplete="organization"/></label><label>Institution type<select value={schoolApplication.institutionType} onChange={(event) => updateSchoolApplication('institutionType', event.target.value as InstitutionApplicationInput['institutionType'])}><option value="school">School</option><option value="college">College or training institution</option><option value="other">Other education institution</option></select></label><label>Registration number<input required maxLength={100} value={schoolApplication.registrationNumber} onChange={(event) => updateSchoolApplication('registrationNumber', event.target.value)} placeholder="Official registration number"/></label><label>County<input required maxLength={100} value={schoolApplication.county} onChange={(event) => updateSchoolApplication('county', event.target.value)} placeholder="e.g. Kiambu" autoComplete="address-level1"/></label><label>Town or locality<input required maxLength={100} value={schoolApplication.town} onChange={(event) => updateSchoolApplication('town', event.target.value)} placeholder="e.g. Thika" autoComplete="address-level2"/></label><label>Physical address <small>Optional</small><input maxLength={240} value={schoolApplication.physicalAddress} onChange={(event) => updateSchoolApplication('physicalAddress', event.target.value)} placeholder="Street, area or nearby landmark" autoComplete="street-address"/></label></div></section>
+      <section className="school-application-section"><div className="school-form-section-title"><span>02</span><div><h2>School representative</h2><p>We’ll use these contacts to follow up on your application.</p></div></div><div className="school-form-grid"><label>Full name<input required maxLength={160} value={schoolApplication.contactName} onChange={(event) => updateSchoolApplication('contactName', event.target.value)} placeholder="Representative’s full name" autoComplete="name"/></label><label>Position at the institution<input required maxLength={100} value={schoolApplication.contactRole} onChange={(event) => updateSchoolApplication('contactRole', event.target.value)} placeholder="e.g. Head teacher" autoComplete="organization-title"/></label><label>Work email address<input required type="email" maxLength={254} value={schoolApplication.contactEmail} onChange={(event) => updateSchoolApplication('contactEmail', event.target.value)} placeholder="name@school.ac.ke" autoComplete="email"/></label><label>Kenyan phone number<input required type="tel" maxLength={30} value={schoolApplication.contactPhone} onChange={(event) => updateSchoolApplication('contactPhone', event.target.value)} placeholder="0712 345 678" autoComplete="tel"/></label><label className="school-form-wide">What does your institution need? <small>Optional</small><textarea rows={4} maxLength={2000} value={schoolApplication.notes} onChange={(event) => updateSchoolApplication('notes', event.target.value)} placeholder="Approximate learner count, grades or the support you’re looking for"/></label></div></section>
+      {schoolError && <p className="school-application-error" role="alert">{schoolError}</p>}<div className="school-form-submit-row"><p><MapPin size={15}/> Your information is sent securely for Guardian Exams administrator review.</p><button className="button button-primary" type="submit" disabled={schoolSubmitting}>{schoolSubmitting ? 'Submitting…' : 'Submit school application'} <Send size={15}/></button></div>
+    </form>}
+  </main>
   if (screen === 'pricing') return <main className="public-info-page pricing-page">
     <div className="market-breadcrumb"><button onClick={() => navigate('home')}>Home</button><span>/</span><strong>Plans</strong></div>
     <section className="public-page-heading"><span className="market-eyebrow">LEARNING THAT FITS YOUR NEEDS</span><h1>Choose how you want to prepare.</h1><p>Start with individual papers or explore access for learners, families, teachers and schools.</p><small>Prices below are illustrative prototype values for founder review. No plan is activated and no payment is taken.</small></section>
-    <div className="plan-grid">{plans.map((plan) => <article className={`plan-card ${plan.featured ? 'plan-featured' : ''}`} key={plan.name}>{plan.featured && <span className="plan-ribbon">FAMILY FAVOURITE</span>}<span className="market-eyebrow">GUARDIAN EXAMS {plan.name.toUpperCase()}</span><h2>{plan.name}</h2><p>{plan.description}</p><div className="plan-price">{plan.price}<small>{plan.period}</small></div><ul>{plan.features.map((feature) => <li key={feature}><Check size={15}/>{feature}</li>)}</ul><button className={`button ${plan.featured ? 'button-primary' : 'button-secondary'}`} onClick={() => plan.name === 'School' ? navigate('support') : choosePlan(plan.name)}>{plan.name === 'School' ? 'Ask about school access' : 'Preview this plan'} <ArrowRight size={15}/></button></article>)}</div>
+    <div className="plan-grid">{plans.map((plan) => <article className={`plan-card ${plan.featured ? 'plan-featured' : ''}`} key={plan.name}>{plan.featured && <span className="plan-ribbon">FAMILY FAVOURITE</span>}<span className="market-eyebrow">GUARDIAN EXAMS {plan.name.toUpperCase()}</span><h2>{plan.name}</h2><p>{plan.description}</p><div className="plan-price">{plan.price}<small>{plan.period}</small></div><ul>{plan.features.map((feature) => <li key={feature}><Check size={15}/>{feature}</li>)}</ul><button className={`button ${plan.featured ? 'button-primary' : 'button-secondary'}`} onClick={() => plan.name === 'School' ? navigate('school-access') : choosePlan(plan.name)}>{plan.name === 'School' ? 'Apply for school access' : 'Preview this plan'} <ArrowRight size={15}/></button></article>)}</div>
     <div className="pricing-footnote"><CircleHelp size={17}/><span><strong>Need help choosing?</strong><small>Compare individual papers with subscription access, or ask us about a school workspace.</small></span><button className="market-text-link" onClick={() => navigate('support')}>Get help <ArrowRight size={14}/></button></div>
   </main>
 

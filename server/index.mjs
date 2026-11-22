@@ -349,6 +349,30 @@ async function router(request, response) {
 
   if (method === 'GET' && path === '/api/health') return sendJson(response, 200, { status: 'ok', service: 'guardian-auth-api', time: now() })
 
+  if (method === 'POST' && path === '/api/institution-applications') {
+    rateLimit(request, 'institution-application', 5, 60_000)
+    const text = (value, max) => typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, max) : ''
+    const institutionName = text(payload.institutionName, 180)
+    const institutionType = ['school', 'college', 'other'].includes(payload.institutionType) ? payload.institutionType : 'school'
+    const registrationNumber = text(payload.registrationNumber, 100)
+    const county = text(payload.county, 100)
+    const town = text(payload.town, 100)
+    const physicalAddress = text(payload.physicalAddress, 240) || null
+    const contactName = text(payload.contactName, 160)
+    const contactRole = text(payload.contactRole, 100)
+    const contactEmail = normalizeEmail(payload.contactEmail)
+    const contactPhone = normalizePhone(payload.contactPhone)
+    const notes = typeof payload.notes === 'string' ? payload.notes.trim().slice(0, 2000) || null : null
+    if (institutionName.length < 2 || registrationNumber.length < 2 || !county || !town || contactName.length < 2 || !contactRole) fail(400, 'INSTITUTION_APPLICATION_REQUIRED', 'Complete the institution name, registration number, location and representative details.')
+    if (!contactEmail || !emailPattern.test(contactEmail)) fail(400, 'INSTITUTION_APPLICATION_EMAIL_INVALID', 'Enter a valid representative email address.')
+    if (!contactPhone || !phonePattern.test(contactPhone)) fail(400, 'INSTITUTION_APPLICATION_PHONE_INVALID', 'Enter a valid Kenyan phone number.')
+    const duplicate = await prepare(`SELECT id FROM institution_applications WHERE status='pending' AND (LOWER(registration_number)=LOWER(?) OR contact_email=?) LIMIT 1`).get(registrationNumber, contactEmail)
+    if (duplicate) fail(409, 'INSTITUTION_APPLICATION_EXISTS', 'A pending application already exists for this registration number or email address.')
+    const application = await prepare(`INSERT INTO institution_applications(institution_name,institution_type,registration_number,county,town,physical_address,contact_name,contact_role,contact_email,contact_phone,notes)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id,status,created_at AS "createdAt"`).get(institutionName, institutionType, registrationNumber, county, town, physicalAddress, contactName, contactRole, contactEmail, contactPhone, notes)
+    return sendJson(response, 201, { application, message: 'School access request received. Our team will review the details and contact the representative.' })
+  }
+
   if (method === 'GET' && path === '/api/marketplace/payment-options') {
     const mpesa = darajaConfig()
     return sendJson(response, 200, { mpesa: { enabled: mpesa.ready, environment: mpesa.ready ? mpesa.environment : null } })
@@ -1441,9 +1465,51 @@ async function router(request, response) {
   if (method === 'GET' && path === '/api/admin/institutions') {
     const auth = await getAuth(request)
     requireRole(auth, ['Platform admin'])
-    const institutions = await prepare(`SELECT id,name,institution_type AS "institutionType",county,contact_email AS "contactEmail",
+    const institutions = await prepare(`SELECT id,name,institution_type AS "institutionType",registration_number AS "registrationNumber",county,town,contact_email AS "contactEmail",
       contact_phone AS "contactPhone",status,created_at AS "createdAt" FROM institutions ORDER BY created_at DESC LIMIT 500`).all()
     return sendJson(response, 200, { institutions })
+  }
+
+  if (method === 'GET' && path === '/api/admin/institution-applications') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const status = url.searchParams.get('status') || 'pending'
+    if (!['pending', 'approved', 'rejected'].includes(status)) fail(400, 'INSTITUTION_APPLICATION_STATUS_INVALID', 'Choose a valid application status.')
+    const applications = await prepare(`SELECT a.id,a.institution_name AS "institutionName",a.institution_type AS "institutionType",a.registration_number AS "registrationNumber",
+      a.county,a.town,a.physical_address AS "physicalAddress",a.contact_name AS "contactName",a.contact_role AS "contactRole",a.contact_email AS "contactEmail",
+      a.contact_phone AS "contactPhone",a.notes,a.status,a.institution_id AS "institutionId",a.review_note AS "reviewNote",a.reviewed_at AS "reviewedAt",a.created_at AS "createdAt"
+      FROM institution_applications a WHERE a.status=? ORDER BY a.created_at DESC LIMIT 250`).all(status)
+    return sendJson(response, 200, { applications })
+  }
+
+  const institutionApplicationReviewMatch = path.match(/^\/api\/admin\/institution-applications\/([0-9a-f-]+)\/review$/i)
+  if (method === 'PATCH' && institutionApplicationReviewMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const status = payload.status
+    const reviewNote = typeof payload.reviewNote === 'string' ? payload.reviewNote.trim().slice(0, 1500) : ''
+    if (!['approved', 'rejected'].includes(status)) fail(400, 'INSTITUTION_APPLICATION_DECISION_INVALID', 'Choose approve or reject.')
+    if (status === 'rejected' && reviewNote.length < 10) fail(400, 'INSTITUTION_APPLICATION_NOTE_REQUIRED', 'Add at least 10 characters explaining why the application was rejected.')
+    const reviewedAt = now()
+    const result = await db.transaction(async (tx) => {
+      const application = await tx.one('SELECT * FROM institution_applications WHERE id=$1 FOR UPDATE', [institutionApplicationReviewMatch[1]])
+      if (!application || application.status !== 'pending') fail(404, 'PENDING_INSTITUTION_APPLICATION_NOT_FOUND', 'That application is not waiting for review.')
+      let institutionId = null
+      if (status === 'approved') {
+        const institution = await tx.one(`INSERT INTO institutions(name,institution_type,registration_number,county,town,physical_address,contact_name,contact_role,contact_email,contact_phone,status,created_by)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active',$11)
+          RETURNING id,name,institution_type AS "institutionType",registration_number AS "registrationNumber",county,town,contact_email AS "contactEmail",contact_phone AS "contactPhone",status`,
+        [application.institution_name, application.institution_type, application.registration_number, application.county, application.town, application.physical_address, application.contact_name, application.contact_role, application.contact_email, application.contact_phone, auth.user.id])
+        institutionId = institution.id
+      }
+      const reviewed = await tx.one(`UPDATE institution_applications SET status=$1,institution_id=$2,review_note=$3,reviewed_by=$4,reviewed_at=$5 WHERE id=$6
+        RETURNING id,institution_name AS "institutionName",status,institution_id AS "institutionId",review_note AS "reviewNote",reviewed_at AS "reviewedAt"`,
+      [status, institutionId, reviewNote || null, auth.user.id, reviewedAt, application.id])
+      await tx.query(`INSERT INTO audit_events(id,actor_user_id,action,details_json,created_at) VALUES($1,$2,$3,$4::jsonb,$5)`,
+        [randomUUID(), auth.user.id, `admin.institution_application_${status}`, JSON.stringify({ applicationId: application.id, institutionId, registrationNumber: application.registration_number }), reviewedAt])
+      return reviewed
+    })
+    return sendJson(response, 200, { application: result, message: status === 'approved' ? 'Institution approved and added to the directory. Invite the representative as School admin to finish account setup.' : 'Institution application rejected.' })
   }
 
   if (method === 'POST' && path === '/api/admin/institutions') {

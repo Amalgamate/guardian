@@ -1,0 +1,28 @@
+.school-access-page .public-page-heading{margin-bottom:22px}
+.school-access-page .public-page-heading .market-eyebrow{display:inline-flex;align-items:center;gap:7px}
+.school-application-form{display:grid;gap:14px}
+.school-application-section{padding:22px;background:#fff;border:1px solid #e1e8f0;border-radius:9px;box-shadow:0 4px 14px rgba(16,36,59,.035)}
+.school-form-section-title{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}
+.school-form-section-title>span{flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#eaf0ff;color:#2457d6;font-size:12px;font-weight:800}
+.school-form-section-title h2{margin:0;color:#172b42;font:750 17px Manrope,Inter,sans-serif}
+.school-form-section-title p{margin:4px 0 0;color:#728297;font-size:12px;line-height:1.5}
+.school-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.school-form-grid label{display:grid;align-content:start;gap:6px;min-width:0;color:#364e67;font-size:12px;font-weight:650}
+.school-form-grid label small{display:inline;color:#8694a4;font-size:10px;font-weight:500}
+.school-form-grid input,.school-form-grid select,.school-form-grid textarea{width:100%;min-height:43px;padding:10px 12px;border:1px solid #dbe4ee;border-radius:6px;background:#fff;color:#1c344c;font:500 13px Inter,sans-serif;outline:none}
+.school-form-grid textarea{resize:vertical}
+.school-form-grid input:focus,.school-form-grid select:focus,.school-form-grid textarea:focus{border-color:#5b83ed;box-shadow:0 0 0 3px #315efb18}
+.school-form-wide{grid-column:1/-1}
+.school-form-submit-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:5px 2px}
+.school-form-submit-row p{display:flex;align-items:flex-start;gap:7px;margin:0;color:#74859a;font-size:11px;line-height:1.5}
+.school-form-submit-row p svg{flex:none;color:#16a58a}
+.school-form-submit-row .button{min-height:44px;white-space:nowrap}
+.school-form-submit-row .button:disabled{opacity:.7;cursor:wait}
+.school-application-error{margin:0;padding:11px 13px;border:1px solid #f0caca;border-radius:6px;background:#fff5f5;color:#b33c3c;font-size:12px}
+.school-application-success{display:flex;align-items:flex-start;gap:14px;padding:23px;background:#fff;border:1px solid #ccebdd;border-radius:9px;box-shadow:0 5px 18px rgba(16,36,59,.04)}
+.school-application-success>span{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:#e4f7ef;color:#12876d}
+.school-application-success h2{margin:0 0 7px;color:#17314a;font:750 20px Manrope,Inter,sans-serif}
+.school-application-success p{margin:0 0 6px;color:#536a80;font-size:13px;line-height:1.6}
+.school-application-success small{color:#8290a0;font-size:11px;line-height:1.5}
+.school-application-success .button{flex:none;margin-left:auto}
+@media(max-width:650px){.school-application-section{padding:17px 14px}.school-form-grid{grid-template-columns:1fr;gap:12px}.school-form-wide{grid-column:auto}.school-form-submit-row{align-items:stretch;flex-direction:column}.school-form-submit-row .button{width:100%;justify-content:center}.school-application-success{flex-wrap:wrap;padding:18px}.school-application-success>div{flex:1;min-width:calc(100% - 60px)}.school-application-success .button{width:100%;justify-content:center;margin:4px 0 0}}

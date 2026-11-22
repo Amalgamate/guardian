@@ -66,10 +66,12 @@ function App() {
     { id: 'streak', title: 'You’re on a 5-day learning streak', detail: 'A little practice today keeps it going.', time: 'Yesterday · 8:00 am', tone: 'gold' },
   ]
   const unreadNotifications = notificationItems.filter((item) => !readNotifications.includes(item.id)).length
+  const isPlatformAdmin = authSession?.activeRole === 'Platform admin'
 
-  if (authOpen) return <AuthFlow onBack={() => setAuthOpen(false)} onComplete={(session) => { setAuthSession(session); setAuthOpen(false); setWorkspaceOpen(true) }} />
+  if (authOpen) return <AuthFlow onBack={() => { setAuthOpen(false); if (isPlatformAdmin) { setMarketplaceOpen(false); setWorkspaceOpen(false) } else { setMarketplaceOpen(true); setWorkspaceOpen(false) } }} onComplete={(session) => { setAuthSession(session); setAuthOpen(false); setWorkspaceOpen(true) }} />
   if (marketplaceOpen) return <Marketplace session={authSession} backLabel={workspaceMarketplace ? 'Return to workspace' : ''} onSignIn={() => { setMarketplaceOpen(false); setAuthOpen(true) }} onBack={() => { setMarketplaceOpen(false); if (workspaceMarketplace) { setWorkspaceOpen(true); setWorkspaceMarketplace(false) } }} />
   if (workspaceOpen) return <Workspace session={authSession} onLogout={() => { void authApi.logout().catch(() => {}).finally(() => { setAuthSession(undefined); setWorkspaceOpen(false); setAuthOpen(true) }) }} onMarketplace={() => { setWorkspaceOpen(false); setWorkspaceMarketplace(true); setMarketplaceOpen(true) }} />
+  if (!isPlatformAdmin) return <Marketplace session={authSession} onBack={() => setMarketplaceOpen(true)} onSignIn={() => setAuthOpen(true)} />
 
   return <div className="app-shell" style={fontStyle}>
     <header className="topbar">
