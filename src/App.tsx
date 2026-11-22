@@ -3,6 +3,7 @@ import { ArrowRight, Bell, BookOpen, CheckCircle2, Check, ChevronDown, CircleHel
 import Marketplace from './Marketplace'
 import Workspace from './Workspace'
 import AuthFlow from './AuthFlow'
+import { authApi, type AuthSession } from './authApi'
 
 function Wordmark({ inverse = false }: { inverse?: boolean }) {
   return <span className={`wordmark ${inverse ? 'wordmark-inverse' : ''}`}><span className="wordmark-name"><span className="wordmark-cap-badge"><GraduationCap className="wordmark-cap" aria-hidden="true"/></span><span className="wordmark-guardian">Guardian</span> <span className="wordmark-exams">Exams</span></span><span className="wordmark-period">.</span></span>
@@ -34,6 +35,12 @@ function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceMarketplace, setWorkspaceMarketplace] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
+  const [authSession, setAuthSession] = useState<AuthSession>()
+  useEffect(() => {
+    let current = true
+    authApi.me().then((session) => { if (current) setAuthSession(session) }).catch(() => {})
+    return () => { current = false }
+  }, [])
   const fontStyle = { '--type-scale': fontScale === 'large' ? 1.2 : 1 } as CSSProperties
   const tourSteps = [
     { title: 'Find the right paper', text: 'Browse by curriculum, grade, subject and year. Paper cards show what is included before you choose.' },
@@ -59,10 +66,12 @@ function App() {
     { id: 'streak', title: 'You’re on a 5-day learning streak', detail: 'A little practice today keeps it going.', time: 'Yesterday · 8:00 am', tone: 'gold' },
   ]
   const unreadNotifications = notificationItems.filter((item) => !readNotifications.includes(item.id)).length
+  const isPlatformAdmin = authSession?.activeRole === 'Platform admin'
 
-  if (authOpen) return <AuthFlow onBack={() => setAuthOpen(false)} onComplete={() => { setAuthOpen(false); setWorkspaceOpen(true) }} />
-  if (marketplaceOpen) return <Marketplace backLabel={workspaceMarketplace ? 'Return to workspace' : 'Back to home'} onSignIn={() => { setMarketplaceOpen(false); setAuthOpen(true) }} onBack={() => { setMarketplaceOpen(false); if (workspaceMarketplace) { setWorkspaceOpen(true); setWorkspaceMarketplace(false) } }} />
-  if (workspaceOpen) return <Workspace onLogout={() => { setWorkspaceOpen(false); setAuthOpen(true) }} onMarketplace={() => { setWorkspaceOpen(false); setWorkspaceMarketplace(true); setMarketplaceOpen(true) }} />
+  if (authOpen) return <AuthFlow onBack={() => { setAuthOpen(false); if (isPlatformAdmin) { setMarketplaceOpen(false); setWorkspaceOpen(false) } else { setMarketplaceOpen(true); setWorkspaceOpen(false) } }} onComplete={(session) => { setAuthSession(session); setAuthOpen(false); setWorkspaceOpen(true) }} />
+  if (marketplaceOpen) return <Marketplace session={authSession} backLabel={workspaceMarketplace ? 'Return to workspace' : ''} onSignIn={() => { setMarketplaceOpen(false); setAuthOpen(true) }} onBack={() => { setMarketplaceOpen(false); if (workspaceMarketplace) { setWorkspaceOpen(true); setWorkspaceMarketplace(false) } }} />
+  if (workspaceOpen) return <Workspace session={authSession} onLogout={() => { void authApi.logout().catch(() => {}).finally(() => { setAuthSession(undefined); setWorkspaceOpen(false); setAuthOpen(true) }) }} onMarketplace={() => { setWorkspaceOpen(false); setWorkspaceMarketplace(true); setMarketplaceOpen(true) }} />
+  if (!isPlatformAdmin) return <Marketplace session={authSession} onBack={() => setMarketplaceOpen(true)} onSignIn={() => setAuthOpen(true)} />
 
   return <div className="app-shell" style={fontStyle}>
     <header className="topbar">

@@ -11,6 +11,17 @@ npm run dev
 
 Open the Vite URL shown in the terminal. The current development setup normally uses `http://localhost:5174/`.
 
+## Start the authentication API
+
+Use Node.js 22.13 or later and a running PostgreSQL server. In a second terminal:
+
+```sh
+Copy-Item .env.example .env
+npm run dev:api
+```
+
+The API stores accounts and sessions in PostgreSQL and applies its schema migrations on startup. Set `DATABASE_URL` in `.env`; local OTP defaults to the API terminal. Configure Resend and MobileSasa for email and SMS delivery using [docs/LIVE_INTEGRATIONS.md](docs/LIVE_INTEGRATIONS.md). Optionally set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` in `.env` before the first start to enable administrator-issued role invitations. See [docs/AUTH_BACKEND.md](docs/AUTH_BACKEND.md) for API routes, role model and remaining production gaps.
+
 ## Build
 
 ```sh
@@ -27,8 +38,8 @@ npm run build
 - Teacher **Marking** demonstrates a submission queue, auto-marking objective responses, rubric-based written marking, saved drafts and publishing results. Teacher **Wallet & earnings** records marketplace purchases, pending settlement, an illustrative 80/20 split and withdrawal requests. Platform admins can settle proceeds and approve, reject or record payouts as paid.
 - **Inbox** is available to all demo roles for in-app messages. Platform admins can review all sample threads and payout requests. Replies and approval states persist locally.
 - Marketplace checkout adds teacher-vendor sales to pending settlements. **Download sample PDF** generates and downloads an illustrative one-page PDF; it does not contain the original source paper.
-- In the marketplace, open the Jane Mwangi account control for sign-in and registration. Profile avatar in a workspace opens the sign-out confirmation. Forgot-password and registration paths include simulated email/SMS OTP; use demo code `123456`.
+- In the marketplace, open the account control for sign-in and registration. The login, registration, email/SMS OTP verification, password reset and logout flows use the local API when it is running. Preview workspace access remains available without signing in.
 
-The project uses browser local storage for prototype state. The teacher PDF picker only records a filename; downloadable PDFs are generated samples. All academic data and identities are illustrative. No real payments, accounts, file processing, email, SMS, WhatsApp or push notifications are connected.
+Marketplace, learning and school operations still use some browser-local prototype data. Authentication accounts persist in PostgreSQL. Resend, MobileSasa and Daraja flows require their server-side configuration before they send messages or initiate payments. The teacher PDF picker only records a filename; downloadable PDFs are generated samples. All academic data and identities are illustrative.
 
-See [PROJECT_PROGRESS.md](PROJECT_PROGRESS.md) for milestone coverage, verification notes and limitations, [docs/PRODUCT_FLOW_AUDIT.md](docs/PRODUCT_FLOW_AUDIT.md) for the screen inventory and gaps, and [docs/EXAMIFY_COMPLETE_PRODUCT_PROMPT.md](docs/EXAMIFY_COMPLETE_PRODUCT_PROMPT.md) for the updated implementation brief. The prototype is responsive web groundwork; an installable PWA and Flutter client are follow-on implementation stages.
+See [PROJECT_PROGRESS.md](PROJECT_PROGRESS.md) for milestone coverage, verification notes and limitations, [docs/PRODUCT_FLOW_AUDIT.md](docs/PRODUCT_FLOW_AUDIT.md) for the screen inventory and gaps, [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md) for live hosting and GitHub CI, and [docs/EXAMIFY_COMPLETE_PRODUCT_PROMPT.md](docs/EXAMIFY_COMPLETE_PRODUCT_PROMPT.md) for the updated implementation brief. The prototype is responsive web groundwork; an installable PWA and Flutter client are follow-on implementation stages.

@@ -8,3 +8,5 @@
 .ws-brand strong em{font-style:normal;color:#2457d6}.ws-brand strong span{color:#16a58a}
 
 .wordmark-name{display:inline-flex;align-items:center;gap:.18em}.wordmark-cap{width:1.05em;height:1.05em;flex:none;color:currentColor;stroke-width:2.5}.guardian-logo-cap{width:1.12em;height:1.12em;flex:none;color:#315EFB;stroke-width:2.5}.auth-brand strong,.ws-brand strong{display:flex;align-items:center;gap:.18em}.auth-brand strong em,.ws-brand strong em{font-style:normal;color:#315EFB}
+
+.ws-live-empty{min-height:260px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:clamp(24px,5vw,48px);gap:12px}.ws-live-empty h2{margin:4px 0 0;color:#10243b;font-size:22px}.ws-live-empty p{max-width:650px;margin:0;color:#61758b;line-height:1.65}.ws-live-links{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}.ws-live-links .ws-button{display:inline-flex;align-items:center;gap:8px}
