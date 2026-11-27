@@ -7,6 +7,7 @@
 - Safaricom Daraja STK Push for signed-in Learner and Parent marketplace orders. Payment state is persisted in PostgreSQL, verified callbacks mark orders paid, and paid orders create the existing seller settlement and pending wallet ledger records.
 - Customer checkout shows provider availability, phone entry, the pending prompt state, callback polling, retry after a confirmed failure, and an administrator-review state when callback amount, phone or receipt data does not match the order.
 - Platform administrators have a Payments page that reports Resend, SMS and Daraja readiness without exposing credentials.
+- Guardian Exams school pre-orders use per-student grade-pack pricing, a configurable flat delivery fee, server-side totals, saved order price snapshots, and the configured Daraja STK flow. Platform admin → Exam pricing edits the grade prices and reviews school orders.
 - OTP resend is rate-limited with a 60-second cooldown and a maximum of four recent challenges in 15 minutes.
 
 ## Server environment configuration
@@ -38,9 +39,11 @@ The API refuses production mode unless Resend is selected and configured. Daraja
 
 ## Database and screens
 
-Migration `007_live_checkout.sql` adds payment references, buyer phone, error/review status and indexes to marketplace orders. The API applies it on startup. Restart the Guardian Exams API against the intended PostgreSQL database after deploying the code.
+Migration `007_live_checkout.sql` adds marketplace payment fields. Migration `012_guardian_exam_orders.sql` adds school exam orders and editable grade/delivery pricing. The API applies migrations on startup. Restart the Guardian Exams API against the intended PostgreSQL database after deploying the code.
 
 - Customer checkout: Marketplace → Cart → Checkout.
+- School exam packs: Pre Order Guardian Exams → select grades and student counts → review itemized price → M-PESA checkout.
+- Grade pack prices and school orders: Platform admin → Exam pricing.
 - Provider readiness: Platform admin → Payments.
 - Email: account registration, verification resend, password recovery and payment receipt.
 
@@ -50,6 +53,8 @@ Migration `007_live_checkout.sql` adds payment references, buyer phone, error/re
 - Register the Guardian Exams callback URL for the Daraja application and confirm the callback can reach the deployed API.
 - Run a sandbox registration/password-reset cycle and a marketplace STK Push from a signed-in test buyer. Confirm successful callback, failed callback, mismatch-to-review handling, receipt email, and seller settlement creation before changing the Daraja environment to production.
 - Add Guardian Exams' MobileSasa credentials to its own server environment and verify the approved sender ID, account balance and a controlled Kenyan test phone. Credentials were not copied from TrendScore into this repository.
-- Add a separate school Guardian-series preorder/payment workflow and Daraja B2C integration for teacher withdrawals. This milestone covers approved marketplace resource purchases only; teacher payout approvals remain internal and do not send B2C payments.
-- Connect uploaded exam files to buyer entitlements and secure downloads. Payment confirmation currently records the order, but the original seller file is not stored or delivered.
+- Marketplace print fulfillment is connected: sellers upload private PDF/ZIP print masters, admins retrieve them from paid orders, update print/dispatch states, and record courier tracking. This does not assign a delivery run automatically or integrate directly with a courier API.
+- Marketplace WhatsApp order updates send only to buyers who opted in and only when `WHATSAPP_ORDER_WEBHOOK_URL` and `WHATSAPP_ORDER_WEBHOOK_TOKEN` point to the separately hosted WhatsApp service. No WhatsApp service is provisioned by this repository.
+- Teacher payout approvals remain internal and do not send Daraja B2C payments.
+- Mount persistent storage at `/data/marketplace-files` (or configure `MARKETPLACE_FILES_DIR`) in the API container. Keep this directory private and include it in backups; marketplace files are print masters, not buyer downloads.
 - Move process-local rate limits to shared storage before running multiple API replicas, and review callback logging, CSRF protections, data retention, operational alerts and reconciliation procedures.

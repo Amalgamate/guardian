@@ -4,8 +4,8 @@ import { marketplaceApi, type MarketplaceSubmissionRecord, type SellerSettlement
 import './connected-marketplace.css'
 
 type Mode = 'teacher-submissions' | 'admin-review' | 'teacher-wallet' | 'admin-wallet'
-type Draft = { title: string; description: string; curriculum: string; level: string; grade: string; subject: string; year: string; term: string; type: string; resource: string; price: string; pages: string; questions: string; fileName: string; rightsConfirmed: boolean; interactive: boolean }
-const blankDraft: Draft = { title: '', description: '', curriculum: 'CBC', level: 'Junior School', grade: 'Grade 8', subject: 'Mathematics', year: '2026', term: 'Term 2', type: 'End-term assessment', resource: 'Exam + marking scheme', price: '150', pages: '10', questions: '30', fileName: '', rightsConfirmed: false, interactive: true }
+type Draft = { title: string; description: string; curriculum: string; level: string; grade: string; subject: string; productType: 'single_paper' | 'series'; includedSubjects: string; year: string; term: string; type: string; resource: string; price: string; pages: string; questions: string; fileName: string; rightsConfirmed: boolean; interactive: boolean }
+const blankDraft: Draft = { title: '', description: '', curriculum: 'CBC', level: 'Junior School', grade: 'Grade 8', subject: 'Mathematics', productType: 'single_paper', includedSubjects: '', year: '2026', term: 'Term 2', type: 'End-term assessment', resource: 'Exam + marking scheme', price: '150', pages: '10', questions: '30', fileName: '', rightsConfirmed: false, interactive: false }
 
 export default function ConnectedMarketplaceWorkspace({ mode, onNotify }: { mode: Mode; onNotify: (message: string) => void }) {
   const [submissions, setSubmissions] = useState<MarketplaceSubmissionRecord[]>([])
@@ -19,6 +19,9 @@ export default function ConnectedMarketplaceWorkspace({ mode, onNotify }: { mode
   const [editingId, setEditingId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [draft, setDraft] = useState<Draft>(blankDraft)
+  const [printMaster, setPrintMaster] = useState<File | null>(null)
+  const [seriesSubjects, setSeriesSubjects] = useState<string[]>([])
+  const [seriesChecklistConfigured, setSeriesChecklistConfigured] = useState(false)
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({})
   const [adminTab, setAdminTab] = useState<'settlements' | 'payouts'>('settlements')
   const [payoutAmount, setPayoutAmount] = useState('')
@@ -53,12 +56,20 @@ export default function ConnectedMarketplaceWorkspace({ mode, onNotify }: { mode
 
   useEffect(() => { void refresh() }, [refresh])
 
+  useEffect(() => {
+    if (mode !== 'teacher-submissions' || draft.productType !== 'series') { setSeriesSubjects([]); setSeriesChecklistConfigured(false); return }
+    let active = true
+    marketplaceApi.seriesSubjects(draft.curriculum, draft.grade).then((result) => { if (active) { setSeriesSubjects(result.subjects); setSeriesChecklistConfigured(result.configured) } }).catch(() => { if (active) { setSeriesSubjects([]); setSeriesChecklistConfigured(false) } })
+    return () => { active = false }
+  }, [mode, draft.productType, draft.curriculum, draft.grade])
+
   const toInput = (): SubmissionInput => ({
     title: draft.title.trim(), description: draft.description.trim(), curriculum: draft.curriculum,
-    level: draft.level, grade: draft.grade, subject: draft.subject, year: draft.year, term: draft.term,
+    level: draft.level, grade: draft.grade, subject: draft.productType === 'series' ? 'Complete series' : draft.subject,
+    productType: draft.productType, includedSubjects: draft.includedSubjects.split(',').map((item) => item.trim()).filter(Boolean), year: draft.year, term: draft.term,
     type: draft.type, resource: draft.resource, pages: Number(draft.pages), questions: Number(draft.questions),
-    formats: ['PDF', ...(draft.interactive ? ['Digital'] : [])], price: Number(draft.price),
-    fileName: draft.fileName.trim() || null, rightsConfirmed: draft.rightsConfirmed,
+    formats: [], price: Number(draft.price),
+    fileName: null, rightsConfirmed: draft.rightsConfirmed,
   })
 
   const saveSubmission = async (event: FormEvent, submitForReview: boolean) => {
@@ -70,8 +81,12 @@ export default function ConnectedMarketplaceWorkspace({ mode, onNotify }: { mode
       const result = editingId
         ? await marketplaceApi.updateSubmission(editingId, input)
         : await marketplaceApi.createSubmission(input)
-      if (submitForReview) await marketplaceApi.submitSubmission(result.submission.id)
+      const submissionId = result.submission.id
+      if (printMaster) await marketplaceApi.uploadPrintMaster(submissionId, printMaster)
+      else if (submitForReview && !(editingId ? submissions.find((item) => item.id === submissionId)?.fileUploaded : false)) throw new Error('Upload the actual PDF or ZIP print master before submitting for review.')
+      if (submitForReview) await marketplaceApi.submitSubmission(submissionId)
       setDraft(blankDraft)
+      setPrintMaster(null)
       setEditingId(null)
       setCreating(false)
       await refresh()
@@ -86,13 +101,24 @@ export default function ConnectedMarketplaceWorkspace({ mode, onNotify }: { mode
   const editSubmission = (item: MarketplaceSubmissionRecord) => {
     setEditingId(item.id)
     setCreating(true)
-    setDraft({ title: item.title, description: item.description, curriculum: item.curriculum, level: item.level, grade: item.grade, subject: item.subject, year: item.year, term: item.term, type: item.type, resource: item.resource, price: String(item.price), pages: String(item.pages), questions: String(item.questions), fileName: item.fileName || '', rightsConfirmed: item.rightsConfirmed, interactive: item.formats.includes('Digital') })
+    setDraft({ title: item.title, description: item.description, curriculum: item.curriculum, level: item.level, grade: item.grade, subject: item.subject, productType: item.productType, includedSubjects: item.includedSubjects.join(', '), year: item.year, term: item.term, type: item.type, resource: item.resource, price: String(item.price), pages: String(item.pages), questions: String(item.questions), fileName: item.fileName || '', rightsConfirmed: item.rightsConfirmed, interactive: item.formats.includes('Digital') })
+    setPrintMaster(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const submitExisting = async (id: string) => {
     setSaving(true); setError('')
-    try { await marketplaceApi.submitSubmission(id); await refresh(); onNotify('Resource submitted for administrator review.') }
+    try {
+      const item = submissions.find((record) => record.id === id)
+      if (!item?.fileUploaded) throw new Error('Edit this draft and upload its actual PDF or ZIP print master before submitting for review.')
+      if (item.productType === 'series') {
+        const required = await marketplaceApi.seriesSubjects(item.curriculum, item.grade)
+        const included = new Set(item.includedSubjects.map((subject) => subject.toLocaleLowerCase()))
+        const missing = required.requiredSubjects.filter((subject) => !included.has(subject.toLocaleLowerCase()))
+        if (missing.length) throw new Error(`This series is missing required papers: ${missing.join(', ')}. Edit the draft to add them.`)
+      }
+      await marketplaceApi.submitSubmission(id); await refresh(); onNotify('Resource submitted for administrator review.')
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not submit this resource.') }
     finally { setSaving(false) }
   }
@@ -142,32 +168,32 @@ export default function ConnectedMarketplaceWorkspace({ mode, onNotify }: { mode
     <header className="cm-heading"><div><span className="cm-eyebrow">{mode === 'admin-review' ? 'CONTENT MODERATION' : 'TEACHER RESOURCE PUBLISHING'}</span><h2>{mode === 'admin-review' ? 'Marketplace review queue' : 'Submit a resource to the marketplace'}</h2><p>{mode === 'admin-review' ? 'Review teacher content before it becomes visible to buyers.' : 'Add curriculum details, confirm your rights, then send the resource to an administrator for review.'}</p></div>{mode === 'teacher-submissions' && <button className="cm-button cm-primary" onClick={() => { setCreating((value) => !value); setEditingId(null); setDraft(blankDraft) }}>{creating ? 'Close form' : 'New submission'}</button>}</header>
     {error && <div className="cm-alert" role="alert"><CircleAlert size={17}/>{error}</div>}
     {creating && mode === 'teacher-submissions' && <form className="cm-card cm-form" onSubmit={(event) => void saveSubmission(event, true)}>
-      <div className="cm-card-head"><div><h3>{editingId ? 'Edit resource details' : 'New marketplace resource'}</h3><p>Changes to submitted content are locked until an administrator requests revisions.</p></div><span className="cm-sim-badge">Sample filename only</span></div>
+      <div className="cm-card-head"><div><h3>{editingId ? 'Edit resource details' : 'New marketplace resource'}</h3><p>Upload the print-ready PDF or a ZIP containing the series papers. Buyers order physical copies; files stay private for fulfilment.</p></div><span className="cm-sim-badge">Private print master</span></div>
       <div className="cm-fields">
         <label className="cm-span-two">Resource title<input required minLength={4} maxLength={180} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Grade 8 Mathematics · Term 2 assessment"/></label>
         <label>Curriculum<input required value={draft.curriculum} onChange={(e) => setDraft({ ...draft, curriculum: e.target.value })}/></label>
         <label>Level<input required value={draft.level} onChange={(e) => setDraft({ ...draft, level: e.target.value })}/></label>
         <label>Grade / class<input required value={draft.grade} onChange={(e) => setDraft({ ...draft, grade: e.target.value })}/></label>
-        <label>Subject<input required value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })}/></label>
+        <label>Product type<select value={draft.productType} onChange={(e) => setDraft({ ...draft, productType: e.target.value as Draft['productType'] })}><option value="single_paper">Single paper</option><option value="series">Complete series</option></select></label>
+        {draft.productType === 'single_paper' ? <label>Subject<input required value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })}/></label> : <fieldset className="cm-span-two"><legend>Papers included in this series</legend>{seriesChecklistConfigured ? seriesSubjects.map((subject) => <label className="cm-check" key={subject}><input type="checkbox" checked={draft.includedSubjects.split(',').map((value) => value.trim()).includes(subject)} onChange={(event) => { const current = draft.includedSubjects.split(',').map((value) => value.trim()).filter(Boolean); const next = event.target.checked ? [...current, subject] : current.filter((value) => value !== subject); setDraft({ ...draft, includedSubjects: next.join(', ') }) }}/><span>{subject}</span></label>) : <small>Subject checklist is not configured for this curriculum and grade. Ask an admin to finish Academic Structure before submitting a series.</small>}<small>Choose every paper actually present in the uploaded ZIP. The server checks that all required grade subjects are included.</small></fieldset>}
         <label>Academic year<input required minLength={4} value={draft.year} onChange={(e) => setDraft({ ...draft, year: e.target.value })}/></label>
         <label>Term<input required value={draft.term} onChange={(e) => setDraft({ ...draft, term: e.target.value })}/></label>
         <label>Assessment type<input required value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}/></label>
         <label>Resource format<input required value={draft.resource} onChange={(e) => setDraft({ ...draft, resource: e.target.value })}/></label>
-        <label>Price (KSh)<input required type="number" min="0" max="1000000" step="0.01" value={draft.price} onChange={(e) => setDraft({ ...draft, price: e.target.value })}/></label>
+        <label>Price (KSh)<input required type="number" min="0" max="1000000" step="0.01" value={draft.price} onChange={(e) => setDraft({ ...draft, price: e.target.value })}/>{draft.productType === 'series' && <small>Complete series use the current grade price from Guardian Exam Pricing.</small>}</label>
         <label>Pages<input type="number" min="0" max="2000" value={draft.pages} onChange={(e) => setDraft({ ...draft, pages: e.target.value })}/></label>
         <label>Questions<input type="number" min="0" max="1000" value={draft.questions} onChange={(e) => setDraft({ ...draft, questions: e.target.value })}/></label>
         <label className="cm-span-two">Resource description<textarea required minLength={20} maxLength={4000} rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Explain the learning outcomes and what the buyer receives."/></label>
-        <label className="cm-span-two">Sample filename (optional)<input value={draft.fileName} onChange={(e) => setDraft({ ...draft, fileName: e.target.value })} placeholder="grade-8-mathematics-term-2.pdf"/><small>This records a filename only. File upload and buyer downloads are not connected yet.</small></label>
+        <label className="cm-span-two">Actual print master (PDF or ZIP)<input type="file" accept="application/pdf,.pdf,application/zip,.zip" onChange={(event) => setPrintMaster(event.target.files?.[0] || null)} required={!editingId || !submissions.find((item) => item.id === editingId)?.fileUploaded}/><small>{printMaster ? `${printMaster.name} · ${(printMaster.size / 1024 / 1024).toFixed(1)} MB selected` : editingId && submissions.find((item) => item.id === editingId)?.fileUploaded ? `Current file: ${submissions.find((item) => item.id === editingId)?.fileName}. Leave this empty to keep it.` : 'Required. PDF for one paper; ZIP for a complete series. Maximum 50 MB.'}</small></label>
       </div>
       <label className="cm-check"><input type="checkbox" checked={draft.rightsConfirmed} onChange={(e) => setDraft({ ...draft, rightsConfirmed: e.target.checked })}/><span>I confirm I have permission to publish and sell this material.</span></label>
-      <label className="cm-check"><input type="checkbox" checked={draft.interactive} onChange={(e) => setDraft({ ...draft, interactive: e.target.checked })}/><span>Include a digital or interactive version in the listing metadata.</span></label>
       <div className="cm-actions"><button type="button" className="cm-button" disabled={saving} onClick={(event) => void saveSubmission(event as unknown as FormEvent, false)}>Save draft</button><button type="submit" className="cm-button cm-primary" disabled={saving || !draft.rightsConfirmed}>{saving ? 'Saving…' : 'Submit for review'} <Send size={15}/></button></div>
     </form>}
     {loading ? <div className="cm-card cm-loading"><RefreshCw size={17}/> Loading marketplace records…</div> : <div className="cm-card">
       <div className="cm-card-head"><div><h3>{mode === 'admin-review' ? 'Submissions awaiting action' : 'Your submissions'}</h3><p>{submissions.length} {submissions.length === 1 ? 'resource' : 'resources'} · data from PostgreSQL</p></div><button className="cm-button" onClick={() => void refresh()}><RefreshCw size={14}/> Refresh</button></div>
       {submissions.length === 0 ? <div className="cm-empty"><FileText size={22}/><strong>{mode === 'admin-review' ? 'No submissions waiting for review' : 'No submissions yet'}</strong><span>{mode === 'admin-review' ? 'Submitted teacher resources will appear here.' : 'Save a draft or submit a resource when it is ready.'}</span></div> : <div className="cm-record-list">{submissions.map((item) => <article className="cm-record" key={item.id}>
         <div className="cm-record-top"><div><h4>{item.title}</h4><p>{item.curriculum} · {item.level} · {item.grade} · {item.subject} · {item.year} {item.term}</p></div><span className={`cm-status cm-status-${item.status}`}>{statusLabel(item.status)}</span></div>
-        <p className="cm-description">{item.description}</p><div className="cm-metadata"><span>{item.resource}</span><span>{item.pages} pages</span><span>{item.questions} questions</span><span>KSh {money(item.price)}</span><span>{item.institutionName || item.vendor || 'Teacher'}</span></div>
+        <p className="cm-description">{item.description}</p><div className="cm-metadata"><span>{item.resource}</span><span>{item.pages} pages</span><span>{item.questions} questions</span><span>KSh {money(item.price)}</span><span>{item.institutionName || item.vendor || 'Teacher'}</span><span>{item.fileUploaded ? `Print master: ${item.fileName}` : 'Print master missing'}</span>{item.productType === 'series' && <span>Included papers: {item.includedSubjects.join(', ')}</span>}</div>
         {item.reviewNote && <div className="cm-review-note"><ShieldCheck size={15}/><span>Admin note: {item.reviewNote}</span></div>}
         {mode === 'teacher-submissions' && ['draft', 'changes_requested'].includes(item.status) && <div className="cm-actions"><button className="cm-button" disabled={saving} onClick={() => editSubmission(item)}>Edit draft</button><button className="cm-button cm-primary" disabled={saving || !item.rightsConfirmed} onClick={() => void submitExisting(item.id)}>Submit for review</button></div>}
         {mode === 'admin-review' && item.status === 'submitted' && <div className="cm-review-controls"><label className="cm-span-two">Review note<textarea rows={2} value={reviewNotes[item.id] || ''} onChange={(e) => setReviewNotes({ ...reviewNotes, [item.id]: e.target.value })} placeholder="Explain changes clearly. Required when requesting changes or rejecting."/></label><div className="cm-actions"><button className="cm-button" disabled={saving} onClick={() => void review(item, 'changes_requested')}>Request changes</button><button className="cm-button cm-danger" disabled={saving} onClick={() => void review(item, 'rejected')}><X size={14}/> Reject</button><button className="cm-button cm-primary" disabled={saving} onClick={() => void review(item, 'approved')}><BadgeCheck size={14}/> Approve & publish</button></div></div>}

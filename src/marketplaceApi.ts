@@ -7,6 +7,8 @@ export type MarketplaceSubmissionRecord = {
   level: string
   grade: string
   subject: string
+  productType: 'single_paper' | 'series'
+  includedSubjects: string[]
   year: string
   term: string
   type: string
@@ -18,6 +20,9 @@ export type MarketplaceSubmissionRecord = {
   vendor?: string
   institutionName?: string
   fileName: string | null
+  fileUploaded?: boolean
+  fileMimeType?: string | null
+  fileSizeBytes?: number | null
   rightsConfirmed: boolean
   status: SubmissionStatus
   reviewNote: string | null
@@ -29,7 +34,7 @@ export type SubmissionInput = Omit<MarketplaceSubmissionRecord, 'id' | 'status' 
 export type WalletBalances = { pending: number; available: number; reserved: number; paid: number }
 export type SellerSettlement = { id: string; title: string; amountKes: number | string; status: 'pending' | 'settled'; teacherName?: string; institutionName?: string; createdAt: string; settledAt?: string | null }
 export type TeacherPayout = { id: string; teacherName?: string; teacherEmail?: string | null; teacherUserId?: string; amountKes: number | string; destinationPhone: string; status: 'pending' | 'approved' | 'rejected' | 'paid'; reviewNote?: string | null; requestNote?: string | null; requestedAt: string; reviewedAt?: string | null; paidAt?: string | null }
-export type CatalogProduct = { id: string; title: string; description: string; curriculum: string; level: string; grade: string; subject: string; academicYear: string; term: string; assessmentType: string; resource: string; pageCount: number; questionCount: number; formats: string[]; priceKes: number | string; institutionName: string; vendorName: string; publishedAt: string }
+export type CatalogProduct = { id: string; title: string; description: string; curriculum: string; level: string; grade: string; subject: string; productType: 'single_paper' | 'series'; includedSubjects: string[]; academicYear: string; term: string; assessmentType: string; resource: string; pageCount: number; questionCount: number; formats: string[]; priceKes: number | string; institutionName: string; vendorName: string; publishedAt: string }
 
 export class MarketplaceApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) { super(message); this.name = 'MarketplaceApiError' }
@@ -58,13 +63,20 @@ export const marketplaceApi = {
     const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as Array<[string, string]>)
     return request<{ products: CatalogProduct[] }>(`/api/marketplace/catalog${query.size ? `?${query.toString()}` : ''}`)
   },
-  createOrder: (productIds: string[]) => request<{ order: { id: string; status: string; totalKes: number; currency: 'KES'; isSimulatedPayment: boolean; items: Array<{ productId: string; title: string; priceKes: number }> } }>('/api/marketplace/orders', 'POST', { productIds }),
+  createOrder: (items: Array<{ productId: string; quantity: number }>, delivery: { recipientName: string; recipientPhone: string; deliveryAddress: string; whatsappUpdatesOptIn?: boolean }) => request<{ order: { id: string; status: string; totalKes: number; subtotalKes: number; deliveryFeeKes: number; currency: 'KES'; isSimulatedPayment: boolean; items: Array<{ productId: string; title: string; priceKes: number; quantity: number }> } }>('/api/marketplace/orders', 'POST', { items, ...delivery }),
+  buyerOrders: () => request<{ orders: Array<{ id: string; status: string; totalKes: number | string; deliveryFeeKes: number | string; recipientName: string | null; recipientPhone: string | null; deliveryAddress: string | null; fulfillmentStatus: string; carrierName: string | null; trackingCode: string | null; trackingUrl: string | null; paymentReference: string | null; createdAt: string; items: Array<{ title: string; unitPriceKes: number | string; quantity: number; productType: 'single_paper' | 'series' }> }> }>('/api/marketplace/orders'),
   startMpesaStk: (orderId: string, phone: string) => request<{ order: { id: string; status: string; totalKes: number; isSimulatedPayment: boolean }; message: string }>(`/api/marketplace/orders/${encodeURIComponent(orderId)}/mpesa/stk`, 'POST', { phone }),
   getOrder: (orderId: string) => request<{ order: { id: string; status: string; totalKes: number; paymentReference: string | null; paymentError: string | null; isSimulatedPayment: boolean } }>(`/api/marketplace/orders/${encodeURIComponent(orderId)}`),
   simulatePayment: (orderId: string) => request<{ order: { id: string; status: string; totalKes: number; isSimulatedPayment: boolean }; message: string }>(`/api/marketplace/orders/${encodeURIComponent(orderId)}/simulate-payment`, 'POST', {}),
   teacherSubmissions: () => request<{ submissions: MarketplaceSubmissionRecord[] }>('/api/teacher/marketplace-submissions'),
   adminSubmissions: (status = 'submitted') => request<{ submissions: MarketplaceSubmissionRecord[] }>(`/api/admin/marketplace-submissions?status=${encodeURIComponent(status)}`),
   createSubmission: (input: SubmissionInput) => request<{ submission: { id: string; status: SubmissionStatus } }>('/api/teacher/marketplace-submissions', 'POST', input),
+  seriesSubjects: (curriculum: string, grade: string) => { const query = new URLSearchParams({ curriculum, grade }); return request<{ subjects: string[]; requiredSubjects: string[]; configured: boolean }>(`/api/marketplace/series-subjects?${query}`) },
+  uploadPrintMaster: async (id: string, file: File) => {
+    const response = await fetch(`/api/teacher/marketplace-submissions/${encodeURIComponent(id)}/file?filename=${encodeURIComponent(file.name)}`, { method: 'PUT', credentials: 'include', headers: { 'Content-Type': file.type }, body: file })
+    const result = await response.json().catch(() => ({})) as { error?: { message?: string }; message?: string }
+    if (!response.ok) throw new MarketplaceApiError(result.error?.message || result.message || 'Could not upload the print master.', response.status, 'UPLOAD_FAILED')
+  },
   updateSubmission: (id: string, input: SubmissionInput) => request<{ submission: { id: string; status: SubmissionStatus } }>(`/api/teacher/marketplace-submissions/${encodeURIComponent(id)}`, 'PATCH', input),
   submitSubmission: (id: string) => request<{ submission: { id: string; status: SubmissionStatus } }>(`/api/teacher/marketplace-submissions/${encodeURIComponent(id)}/submit`, 'POST', {}),
   reviewSubmission: (id: string, status: 'approved' | 'changes_requested' | 'rejected', reviewNote: string) => request<{ submission: MarketplaceSubmissionRecord }>(`/api/admin/marketplace-submissions/${encodeURIComponent(id)}/review`, 'PATCH', { status, reviewNote }),

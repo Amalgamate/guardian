@@ -1,8 +1,8 @@
 import { createServer } from 'node:http'
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
 import { promisify } from 'node:util'
-import { readFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDatabase } from './db.mjs'
 import { resendReady, sendGuardianOtp, sendGuardianOrderReceipt, sendGuardianWelcome } from './email.mjs'
@@ -12,6 +12,8 @@ import { handleAcademicStructureRequest } from './academicStructureRoutes.mjs'
 
 const scrypt = promisify(scryptCallback)
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const marketplaceFilesDir = resolve(process.env.MARKETPLACE_FILES_DIR || join(rootDir, 'private-marketplace-files'))
+const marketplaceFileMaxBytes = 50 * 1024 * 1024
 await loadEnv(resolve(rootDir, '.env'))
 
 const roles = ['Learner', 'Parent', 'Teacher', 'School admin', 'Platform admin', 'Examiner']
@@ -133,6 +135,50 @@ function cookieHeader(token, maxAge) {
   return `guardian_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${isProduction ? '; Secure' : ''}`
 }
 function clearCookie() { return `guardian_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` }
+function marketplaceStoredPath(storageKey) {
+  if (typeof storageKey !== 'string' || !/^[0-9a-f-]{36}\.(pdf|zip)$/.test(storageKey)) return null
+  return join(marketplaceFilesDir, storageKey)
+}
+function safeMarketplaceFilename(value, extension = '') {
+  const base = typeof value === 'string' ? value.normalize('NFKC').replace(/[\\/\r\n\u0000-\u001f]/g, '_').replace(/[^A-Za-z0-9._ -]/g, '').replace(/\.\./g, '').trim().slice(0, 140) : ''
+  if (!extension) return base || 'exam-paper'
+  return base.toLowerCase().endsWith(`.${extension}`) ? base : `${base || 'exam-paper'}.${extension}`
+}
+function sendPrivateMarketplaceFile(response, content, mimeType, filename) {
+  const dispositionName = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, '%2A')
+  response.writeHead(200, { 'Content-Type': mimeType, 'Content-Length': content.length, 'Content-Disposition': `attachment; filename="${filename.replace(/[^A-Za-z0-9._ -]/g, '_')}"; filename*=UTF-8''${dispositionName}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+  response.end(content)
+}
+async function respondWithMarketplaceFile(response, storageKey, filename, mimeType) {
+  const storedPath = marketplaceStoredPath(storageKey)
+  if (!storedPath) fail(404, 'MARKETPLACE_FILE_NOT_FOUND', 'No uploaded print master is available for this record.')
+  let content
+  try { content = await readFile(storedPath) } catch { fail(404, 'MARKETPLACE_FILE_NOT_FOUND', 'The uploaded print master is missing from private storage.') }
+  sendPrivateMarketplaceFile(response, content, mimeType || (storageKey.endsWith('.zip') ? 'application/zip' : 'application/pdf'), safeMarketplaceFilename(filename, storageKey.endsWith('.zip') ? 'zip' : 'pdf'))
+}
+async function notifyMarketplaceOrderWhatsApp(orderId, event) {
+  const hook = process.env.WHATSAPP_ORDER_WEBHOOK_URL
+  const token = process.env.WHATSAPP_ORDER_WEBHOOK_TOKEN
+  if (!hook || !token) return
+    let url
+    try { url = new URL(hook) } catch { console.error('WhatsApp order webhook skipped: invalid URL.'); return }
+  if (url.protocol !== 'https:' && !['localhost','127.0.0.1','whatsapp-bot','baileys'].includes(url.hostname)) {
+    console.error('WhatsApp order webhook skipped: use HTTPS or an internal Docker host.')
+    return
+  }
+  const order = await db.one(`SELECT id,recipient_name AS "recipientName",recipient_phone AS "recipientPhone",delivery_address AS "deliveryAddress",whatsapp_updates_opt_in AS "whatsappUpdatesOptIn",fulfillment_status AS "fulfillmentStatus",carrier_name AS "carrierName",tracking_code AS "trackingCode",tracking_url AS "trackingUrl"
+    FROM marketplace_orders WHERE id=$1`, [orderId])
+  if (!order?.whatsappUpdatesOptIn || !order.recipientPhone) return
+  const labels = { paid: 'payment confirmed; your exam papers are queued for printing', printing: 'your exam papers are now being printed', ready_for_dispatch: 'your exam papers are packed and ready for dispatch', dispatched: 'your exam papers have been dispatched', delivered: 'your exam papers have been marked delivered' }
+  const lines = [`Guardian Exams order ${order.id.slice(0,8).toUpperCase()}: ${labels[event] || 'order status updated'}.`]
+  if (event === 'dispatched' && order.carrierName) lines.push(`Carrier: ${order.carrierName}${order.trackingCode ? ` · tracking: ${order.trackingCode}` : ''}${order.trackingUrl ? ` · ${order.trackingUrl}` : ''}`)
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 5000)
+  try {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ event: 'marketplace_order_update', orderId: order.id, recipientName: order.recipientName, recipientPhone: order.recipientPhone, message: lines.join('\n'), fulfillmentStatus: order.fulfillmentStatus, carrierName: order.carrierName, trackingCode: order.trackingCode, trackingUrl: order.trackingUrl }), signal: controller.signal })
+    if (!response.ok) console.error(`WhatsApp order webhook returned HTTP ${response.status} for order ${order.id}.`)
+  } catch (error) { console.error(`WhatsApp order webhook failed for order ${order.id}:`, error instanceof Error ? error.message : 'unknown error') }
+  finally { clearTimeout(timeout) }
+}
 async function bodyJson(request) {
   const chunks = []
   let total = 0
@@ -168,6 +214,8 @@ function marketplaceSubmissionFields(payload = {}) {
   const level = text(payload.level, 80)
   const grade = text(payload.grade, 80)
   const subject = text(payload.subject, 120)
+  const productType = payload.productType === 'series' ? 'series' : 'single_paper'
+  const includedSubjects = Array.isArray(payload.includedSubjects) ? [...new Set(payload.includedSubjects.map((value) => text(value, 120)).filter(Boolean))].slice(0, 30) : []
   const academicYear = text(payload.year ?? payload.academicYear, 12)
   const term = text(payload.term, 80)
   const assessmentType = text(payload.type ?? payload.assessmentType, 100)
@@ -183,7 +231,27 @@ function marketplaceSubmissionFields(payload = {}) {
   if (curriculum.length < 2 || !level || !grade || subject.length < 2 || academicYear.length < 4 || term.length < 2 || assessmentType.length < 2 || resource.length < 2) fail(400, 'SUBMISSION_METADATA_REQUIRED', 'Complete the curriculum, level, grade, subject, academic year, term, assessment type and resource fields.')
   if (!Number.isInteger(pageCount) || pageCount < 0 || pageCount > 2000 || !Number.isInteger(questionCount) || questionCount < 0 || questionCount > 1000) fail(400, 'SUBMISSION_COUNTS_INVALID', 'Enter valid page and question counts.')
   if (!Number.isFinite(priceKes) || priceKes < 0 || priceKes > 1_000_000) fail(400, 'SUBMISSION_PRICE_INVALID', 'Enter a price from KSh 0 to KSh 1,000,000.')
-  return { title, description, curriculum, level, grade, subject, academicYear, term, assessmentType, resource, pageCount, questionCount, formats, priceKes, sampleFileLabel, rightsConfirmed }
+  if (productType === 'series' && includedSubjects.length < 2) fail(400, 'SERIES_SUBJECTS_REQUIRED', 'A series listing must name at least two included subjects.')
+  return { title, description, curriculum, level, grade, subject: productType === 'series' ? 'Complete series' : subject, productType, includedSubjects, academicYear, term, assessmentType, resource, pageCount, questionCount, formats, priceKes, sampleFileLabel, rightsConfirmed }
+}
+function marketplaceCurriculumCode(value) {
+  return /8\s*[-–]\s*4\s*[-–]\s*4|844|legacy/i.test(String(value || '')) ? 'KE-844' : 'KE-CBC'
+}
+async function requiredMarketplaceSeriesSubjects(curriculum, grade) {
+    return db.many(`SELECT s.name,COALESCE(gs.marketplace_required,true) AS "marketplaceRequired" FROM academic_grade_subjects gs
+    JOIN academic_grades g ON g.id=gs.grade_id JOIN academic_levels l ON l.id=g.level_id
+    JOIN academic_curricula c ON c.id=l.curriculum_id JOIN academic_subjects s ON s.id=gs.subject_id
+    WHERE c.code=$1 AND g.name=$2 AND g.status='active' AND l.status='active' AND c.status='active' AND s.status='active'
+    ORDER BY s.name`, [marketplaceCurriculumCode(curriculum), grade])
+}
+async function assertCompleteMarketplaceSeries(submission) {
+  if (submission.product_type !== 'series' && submission.productType !== 'series') return
+  const expected = await requiredMarketplaceSeriesSubjects(submission.curriculum, submission.grade)
+  if (!expected.length) fail(409, 'SERIES_REQUIREMENTS_UNAVAILABLE', `No active subject checklist is configured for ${submission.grade}. Ask an administrator to configure the curriculum catalogue.`)
+  const included = new Set((submission.included_subjects ?? submission.includedSubjects ?? []).map((subject) => String(subject).trim().toLocaleLowerCase('en')))
+  const required = expected.filter((subject) => subject.marketplaceRequired).map((subject) => subject.name)
+  const missing = required.filter((name) => !included.has(name.toLocaleLowerCase('en')))
+  if (missing.length) fail(400, 'SERIES_INCOMPLETE', 'This series is missing subjects required by the active grade catalogue.', { missingSubjects: missing })
 }
 const assessmentQuestionTypes = new Set(['choice', 'multi', 'boolean', 'short', 'number', 'matching', 'ordering', 'essay'])
 function assessmentQuestionFields(question, position) {
@@ -230,7 +298,7 @@ async function walletBalances(queryClient, userId) {
 }
 async function settlePaidMarketplaceOrder(tx, order, actorUserId, paymentReference, paidAt, paymentMethod) {
   const items = await tx.many('SELECT * FROM marketplace_order_items WHERE order_id=$1 ORDER BY seller_user_id,id', [order.id])
-  await tx.query(`UPDATE marketplace_orders SET status='paid',payment_method=$1,payment_reference=$2,paid_at=$3,updated_at=$3,payment_error=NULL
+  await tx.query(`UPDATE marketplace_orders SET status='paid',fulfillment_status='processing',payment_method=$1,payment_reference=$2,paid_at=$3,updated_at=$3,payment_error=NULL
     WHERE id=$4 AND status IN ('awaiting_payment','payment_pending','payment_review')`, [paymentMethod, paymentReference, paidAt, order.id])
   for (const item of items) {
     await tx.query(`INSERT INTO seller_settlements(order_item_id,seller_user_id,amount_kes,created_at) VALUES($1,$2,$3,$4)
@@ -242,6 +310,7 @@ async function settlePaidMarketplaceOrder(tx, order, actorUserId, paymentReferen
     }
   }
   await tx.query(`INSERT INTO audit_events(id,actor_user_id,action,details_json,created_at) VALUES($1,$2,$3,$4::jsonb,$5)`, [randomUUID(), actorUserId, paymentMethod === 'mpesa_daraja' ? 'marketplace.mpesa_payment_confirmed' : 'marketplace.demo_payment_confirmed', JSON.stringify({ orderId: order.id, paymentReference }), paidAt])
+  queueMicrotask(() => { void notifyMarketplaceOrderWhatsApp(order.id, 'paid') })
   return items
 }
 async function findUser(identifier) {
@@ -346,7 +415,76 @@ async function router(request, response) {
   const method = request.method || 'GET'
   const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method)
   if (mutating) checkOrigin(request)
+  const marketplaceUploadMatch = path.match(/^\/api\/teacher\/marketplace-submissions\/([0-9a-f-]{36})\/file$/i)
+  if (method === 'PUT' && marketplaceUploadMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Teacher'])
+    rateLimit(request, 'marketplace-file-upload', 4, 60_000, auth.user.id)
+    const submissionId = marketplaceUploadMatch[1]
+    const submission = await db.one(`SELECT id,status,file_storage_key AS "oldStorageKey"
+      FROM marketplace_submissions WHERE id=$1 AND teacher_user_id=$2`, [submissionId, auth.user.id])
+    if (!submission || !['draft','changes_requested'].includes(submission.status)) fail(404, 'EDITABLE_SUBMISSION_NOT_FOUND', 'Only your editable marketplace drafts can receive a print master.')
+    const requestedName = safeMarketplaceFilename(url.searchParams.get('filename'))
+    const extension = requestedName.toLowerCase().endsWith('.zip') ? 'zip' : 'pdf'
+    const originalName = safeMarketplaceFilename(requestedName, extension)
+    const expectedMime = extension === 'zip' ? ['application/zip','application/x-zip-compressed'] : ['application/pdf']
+    const mimeType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+    if (!expectedMime.includes(mimeType)) fail(415, 'MARKETPLACE_FILE_TYPE_INVALID', 'Upload a PDF, or a ZIP archive containing the series print masters.')
+    const announcedLength = Number(request.headers['content-length'] || 0)
+    if (announcedLength > marketplaceFileMaxBytes) fail(413, 'MARKETPLACE_FILE_TOO_LARGE', 'The print master must be 50 MB or smaller.')
+    const chunks = []; let totalBytes = 0
+    for await (const chunk of request) {
+      totalBytes += chunk.length
+      if (totalBytes > marketplaceFileMaxBytes) fail(413, 'MARKETPLACE_FILE_TOO_LARGE', 'The print master must be 50 MB or smaller.')
+      chunks.push(chunk)
+    }
+    const fileBytes = Buffer.concat(chunks)
+    if (!fileBytes.length || (announcedLength && announcedLength !== fileBytes.length)) fail(400, 'MARKETPLACE_FILE_EMPTY', 'The uploaded print master was empty or incomplete.')
+    const signatureValid = extension === 'pdf' ? fileBytes.subarray(0,5).toString('ascii') === '%PDF-' : fileBytes.length >= 4 && fileBytes[0] === 0x50 && fileBytes[1] === 0x4b && [0x03,0x05,0x07].includes(fileBytes[2]) && [0x04,0x06,0x08].includes(fileBytes[3])
+    if (!signatureValid) fail(415, 'MARKETPLACE_FILE_SIGNATURE_INVALID', 'The file contents do not match the selected PDF or ZIP type.')
+    const storageKey = `${randomUUID()}.${extension}`
+    const storedPath = marketplaceStoredPath(storageKey)
+    await mkdir(marketplaceFilesDir, { recursive: true, mode: 0o700 })
+    await writeFile(storedPath, fileBytes, { flag: 'wx', mode: 0o600 })
+    const checksum = createHash('sha256').update(fileBytes).digest('hex')
+    try {
+      const uploaded = await db.one(`UPDATE marketplace_submissions SET file_storage_key=$1,uploaded_file_name=$2,file_mime_type=$3,file_size_bytes=$4,file_sha256=$5,sample_file_label=$2,updated_at=$6
+        WHERE id=$7 AND teacher_user_id=$8 AND status IN ('draft','changes_requested')
+        RETURNING id,uploaded_file_name AS "fileName",file_mime_type AS "fileMimeType",file_size_bytes AS "fileSizeBytes"`, [storageKey, originalName, mimeType, fileBytes.length, checksum, now(), submissionId, auth.user.id])
+      if (!uploaded) fail(409, 'SUBMISSION_LOCKED', 'This submission is no longer editable. Refresh the page and try again.')
+      if (submission.oldStorageKey) {
+        const referenced = await db.one('SELECT 1 FROM marketplace_order_items WHERE file_storage_key_snapshot=$1 LIMIT 1', [submission.oldStorageKey])
+        if (!referenced) { const oldPath = marketplaceStoredPath(submission.oldStorageKey); if (oldPath) await unlink(oldPath).catch(() => {}) }
+      }
+      await audit('marketplace.print_master_uploaded', auth.user.id, auth.user.id, { submissionId, fileName: uploaded.fileName, mimeType, fileSizeBytes: fileBytes.length, sha256: checksum })
+      return sendJson(response, 201, { file: uploaded, message: 'Print master uploaded and stored privately.' })
+    } catch (error) {
+      await unlink(storedPath).catch(() => {})
+      throw error
+    }
+  }
   const payload = mutating ? await bodyJson(request) : {}
+
+  const teacherFileMatch = path.match(/^\/api\/teacher\/marketplace-submissions\/([0-9a-f-]{36})\/file$/i)
+  if (method === 'GET' && teacherFileMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Teacher'])
+    const file = await db.one(`SELECT file_storage_key AS "storageKey",uploaded_file_name AS "fileName",file_mime_type AS "mimeType"
+      FROM marketplace_submissions WHERE id=$1 AND teacher_user_id=$2`, [teacherFileMatch[1], auth.user.id])
+    if (!file?.storageKey) fail(404, 'MARKETPLACE_FILE_NOT_FOUND', 'This submission has no uploaded print master.')
+    return respondWithMarketplaceFile(response, file.storageKey, file.fileName, file.mimeType)
+  }
+
+  const adminOrderFileMatch = path.match(/^\/api\/admin\/marketplace-order-items\/([0-9a-f-]{36})\/file$/i)
+  if (method === 'GET' && adminOrderFileMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const file = await db.one(`SELECT oi.file_storage_key_snapshot AS "storageKey",oi.file_name_snapshot AS "fileName",oi.file_mime_type_snapshot AS "mimeType",o.status AS "orderStatus"
+      FROM marketplace_order_items oi JOIN marketplace_orders o ON o.id=oi.order_id
+      WHERE oi.id=$1`, [adminOrderFileMatch[1]])
+    if (!file || file.orderStatus !== 'paid') fail(404, 'ORDER_PRINT_MASTER_NOT_FOUND', 'The paid order print master was not found.')
+    return respondWithMarketplaceFile(response, file.storageKey, file.fileName, file.mimeType)
+  }
 
   if (method === 'GET' && path === '/api/health') return sendJson(response, 200, { status: 'ok', service: 'guardian-auth-api', time: now() })
 
@@ -429,18 +567,173 @@ async function router(request, response) {
         JOIN institutions i ON i.id=a.institution_id JOIN users u ON u.id=a.teacher_user_id ORDER BY q.created_at DESC,q.position LIMIT 1000`).all()
       return sendJson(response, 200, { questions, source: 'assessment_questions', independentlyReusable: false })
     }
-    const orders = await prepare(`SELECT o.id,o.status,o.total_kes AS "totalKes",o.payment_method AS "paymentMethod",o.payment_reference AS "paymentReference",
+    const orders = await prepare(`SELECT o.id,o.status,o.total_kes AS "totalKes",o.delivery_fee_kes AS "deliveryFeeKes",o.recipient_name AS "recipientName",o.recipient_phone AS "recipientPhone",o.delivery_address AS "deliveryAddress",o.fulfillment_status AS "fulfillmentStatus",o.carrier_name AS "carrierName",o.tracking_code AS "trackingCode",o.tracking_url AS "trackingUrl",o.payment_method AS "paymentMethod",o.payment_reference AS "paymentReference",
       o.is_simulated_payment AS "isSimulatedPayment",o.created_at AS "createdAt",o.paid_at AS "paidAt",u.full_name AS "buyerName",u.email AS "buyerEmail",
-      COALESCE(json_agg(json_build_object('title',oi.title_snapshot,'unitPriceKes',oi.unit_price_kes,'sellerAmountKes',oi.seller_amount_kes,'platformAmountKes',oi.platform_amount_kes))
+      COALESCE(json_agg(json_build_object('id',oi.id,'submissionId',oi.submission_id,'title',oi.title_snapshot,'unitPriceKes',oi.unit_price_kes,'quantity',oi.quantity,'productType',oi.product_type,'fileName',oi.file_name_snapshot,'hasPrintMaster',oi.file_storage_key_snapshot IS NOT NULL,'sellerAmountKes',oi.seller_amount_kes,'platformAmountKes',oi.platform_amount_kes))
         FILTER (WHERE oi.id IS NOT NULL),'[]'::json) AS items
       FROM marketplace_orders o JOIN users u ON u.id=o.buyer_user_id LEFT JOIN marketplace_order_items oi ON oi.order_id=o.id
       GROUP BY o.id,u.full_name,u.email ORDER BY o.created_at DESC LIMIT 1000`).all()
     return sendJson(response, 200, { orders })
   }
 
+  const marketplaceFulfillmentMatch = path.match(/^\/api\/admin\/marketplace-orders\/([0-9a-f-]+)\/fulfillment$/i)
+  if (method === 'PATCH' && marketplaceFulfillmentMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const nextStatus = ['printing', 'ready_for_dispatch', 'dispatched', 'delivered'].includes(payload.status) ? payload.status : null
+    if (!nextStatus) fail(400, 'FULFILLMENT_STATUS_INVALID', 'Choose a valid next fulfilment step.')
+    const changedAt = now()
+    const updated = await db.transaction(async (tx) => {
+      const current = await tx.one('SELECT id,status,fulfillment_status FROM marketplace_orders WHERE id=$1 FOR UPDATE', [marketplaceFulfillmentMatch[1]])
+      if (!current) fail(404, 'ORDER_NOT_FOUND', 'That marketplace order was not found.')
+      if (current.status !== 'paid') fail(409, 'ORDER_NOT_PAID', 'Only paid orders can be marked as dispatched or delivered.')
+      const transitions = { processing: 'printing', printing: 'ready_for_dispatch', ready_for_dispatch: 'dispatched', dispatched: 'delivered' }
+      if (transitions[current.fulfillment_status] !== nextStatus) fail(409, 'FULFILLMENT_TRANSITION_INVALID', 'Move paid orders through printing, ready for dispatch, dispatched, then delivered.')
+      const carrierName = typeof payload.carrierName === 'string' ? payload.carrierName.trim().slice(0, 120) : null
+      const trackingCode = typeof payload.trackingCode === 'string' ? payload.trackingCode.trim().slice(0, 160) : null
+      let trackingUrl = typeof payload.trackingUrl === 'string' ? payload.trackingUrl.trim().slice(0, 1000) : null
+      if (trackingUrl) { try { const parsed = new URL(trackingUrl); if (parsed.protocol !== 'https:') throw new Error(); trackingUrl = parsed.toString() } catch { fail(400, 'TRACKING_URL_INVALID', 'Tracking links must use HTTPS.') } }
+      if (nextStatus === 'dispatched' && !carrierName) fail(400, 'CARRIER_REQUIRED', 'Enter the courier name before dispatching this order.')
+      return tx.one(`UPDATE marketplace_orders SET fulfillment_status=$1,carrier_name=COALESCE($2,carrier_name),tracking_code=COALESCE($3,tracking_code),tracking_url=COALESCE($4,tracking_url),updated_at=$5 WHERE id=$6 RETURNING id,fulfillment_status AS "fulfillmentStatus"`, [nextStatus, carrierName, trackingCode, trackingUrl, changedAt, current.id])
+    })
+    await audit(`admin.marketplace_order_${nextStatus}`, null, auth.user.id, { orderId: updated.id, fulfillmentStatus: updated.fulfillmentStatus })
+    await notifyMarketplaceOrderWhatsApp(updated.id, nextStatus)
+    return sendJson(response, 200, { order: updated, message: `Order marked ${nextStatus}.` })
+  }
+
+  if (method === 'GET' && path === '/api/public/guardian-exam-pricing') {
+    const grades = await prepare(`SELECT grade_code AS "gradeCode",grade_label AS "gradeLabel",unit_price_kes AS "unitPriceKes" FROM guardian_exam_pricing ORDER BY CASE grade_code WHEN 'PG' THEN 0 WHEN 'PP1' THEN 1 WHEN 'PP2' THEN 2 ELSE 3 END,grade_code`).all()
+    const delivery = await prepare(`SELECT setting_value AS "deliveryFeeKes" FROM guardian_exam_settings WHERE setting_key='delivery_fee_kes'`).get()
+    return sendJson(response, 200, { grades, deliveryFeeKes: Number(delivery?.deliveryFeeKes ?? 300), currency: 'KES' })
+  }
+
+  if (method === 'POST' && path === '/api/public/guardian-exam-orders') {
+    rateLimit(request, 'guardian-exam-order', 5, 60_000)
+    const text = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : ''
+    const schoolName = text(payload.school, 160), contactName = text(payload.contact, 120), email = normalizeEmail(payload.email)
+    const contactPhone = normalizePhone(text(payload.phone, 40)), county = text(payload.county, 100), town = text(payload.town, 100), deliveryAddress = text(payload.address, 300)
+    if (!schoolName || !contactName || !email || !contactPhone || !phonePattern.test(contactPhone) || !county || !town || !deliveryAddress) fail(400, 'GUARDIAN_ORDER_DETAILS_INVALID', 'Enter the school, contact, valid phone, email and full delivery location.')
+    if (!Array.isArray(payload.grades) || !payload.grades.length || payload.grades.length > 12) fail(400, 'GUARDIAN_ORDER_GRADES_INVALID', 'Choose at least one grade and enter its student quantity.')
+    const requested = new Map()
+    for (const row of payload.grades) {
+      const gradeCode = typeof row?.gradeCode === 'string' ? row.gradeCode : ''
+      const quantity = Number(row?.quantity)
+      if (!/^(PG|PP1|PP2|GRADE_[1-9])$/.test(gradeCode) || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 10000 || requested.has(gradeCode)) fail(400, 'GUARDIAN_ORDER_GRADES_INVALID', 'Each selected grade needs a unique student quantity from 1 to 10,000.')
+      requested.set(gradeCode, quantity)
+    }
+    const codes = [...requested.keys()]
+    const pricingSnapshot = await prepare(`SELECT
+      (SELECT jsonb_agg(jsonb_build_object('gradeCode',grade_code,'gradeLabel',grade_label,'unitPriceKes',unit_price_kes)) FROM guardian_exam_pricing WHERE grade_code=ANY(?::text[])) AS grades,
+      (SELECT setting_value FROM guardian_exam_settings WHERE setting_key='delivery_fee_kes') AS "deliveryFeeKes"`).get(codes)
+    const priceRows = pricingSnapshot?.grades || []
+    if (priceRows.length !== codes.length) fail(409, 'GUARDIAN_ORDER_PRICES_UNAVAILABLE', 'One or more selected grades are not currently available for ordering.')
+    const grades = priceRows.map((row) => ({ gradeCode: row.gradeCode, gradeLabel: row.gradeLabel, quantity: requested.get(row.gradeCode), unitPriceKes: Number(row.unitPriceKes), subtotalKes: Number(row.unitPriceKes) * requested.get(row.gradeCode) }))
+    const totalStudents = grades.reduce((sum, row) => sum + row.quantity, 0)
+    const subtotalKes = grades.reduce((sum, row) => sum + row.subtotalKes, 0)
+    const deliveryFeeKes = Number(pricingSnapshot?.deliveryFeeKes ?? 300)
+    const totalKes = subtotalKes + deliveryFeeKes
+    if (!Number.isSafeInteger(totalKes) || totalKes < 1 || totalKes > 100000000) fail(400, 'GUARDIAN_ORDER_TOTAL_INVALID', 'This order total is outside the supported checkout range.')
+    const order = await prepare(`INSERT INTO guardian_exam_orders(school_name,contact_name,email,contact_phone,county,town,delivery_address,grades_snapshot,total_students,subtotal_kes,delivery_fee_kes,total_kes)
+      VALUES(?,?,?,?,?,?,?,?::jsonb,?,?,?,?) RETURNING id,status,created_at AS "createdAt"`).get(schoolName, contactName, email, contactPhone, county, town, deliveryAddress, JSON.stringify(grades), totalStudents, subtotalKes, deliveryFeeKes, totalKes)
+    await audit('guardian_exam.order_created', null, null, { orderId: order.id, totalStudents, gradeCount: grades.length, subtotalKes, deliveryFeeKes, totalKes })
+    return sendJson(response, 201, { order: { ...order, grades, totalStudents, subtotalKes, deliveryFeeKes, totalKes, currency: 'KES' } })
+  }
+
+  const guardianOrderStatusMatch = path.match(/^\/api\/public\/guardian-exam-orders\/([0-9a-f-]+)$/i)
+  if (method === 'GET' && guardianOrderStatusMatch) {
+    const order = await prepare(`SELECT id,status,total_students AS "totalStudents",subtotal_kes AS "subtotalKes",delivery_fee_kes AS "deliveryFeeKes",total_kes AS "totalKes",grades_snapshot AS grades,payment_reference AS "paymentReference",payment_error AS "paymentError",created_at AS "createdAt",paid_at AS "paidAt" FROM guardian_exam_orders WHERE id=?`).get(guardianOrderStatusMatch[1])
+    if (!order) fail(404, 'GUARDIAN_ORDER_NOT_FOUND', 'That school exam order was not found.')
+    return sendJson(response, 200, { order })
+  }
+
+  const guardianOrderStkMatch = path.match(/^\/api\/public\/guardian-exam-orders\/([0-9a-f-]+)\/mpesa\/stk$/i)
+  if (method === 'POST' && guardianOrderStkMatch) {
+    rateLimit(request, 'guardian-exam-stk', 4, 60_000)
+    if (!darajaConfig().ready) fail(503, 'MPESA_NOT_CONFIGURED', 'M-PESA checkout is not available yet. Please try again later.')
+    const phone = normalizeMpesaPhone(payload.phone)
+    if (!phone) fail(400, 'MPESA_PHONE_INVALID', 'Enter a valid Kenyan Safaricom number.')
+    const order = await prepare(`SELECT id,total_kes AS "totalKes",status FROM guardian_exam_orders WHERE id=?`).get(guardianOrderStkMatch[1])
+    if (!order) fail(404, 'GUARDIAN_ORDER_NOT_FOUND', 'That school exam order was not found.')
+    if (!['awaiting_payment','payment_failed'].includes(order.status)) fail(409, 'GUARDIAN_ORDER_NOT_PAYABLE', 'This order cannot start a new payment.')
+    const pending = await prepare(`UPDATE guardian_exam_orders SET status='payment_pending',payer_phone=?,payment_error=NULL,updated_at=? WHERE id=? AND status IN ('awaiting_payment','payment_failed') RETURNING id,total_kes AS "totalKes"`).get(phone, now(), order.id)
+    if (!pending) fail(409, 'GUARDIAN_ORDER_NOT_PAYABLE', 'This order cannot start a new payment.')
+    try {
+      const started = await initiateStkPush({ phone, amount: Number(pending.totalKes), accountReference: pending.id.replaceAll('-', '').slice(0, 12).toUpperCase(), description: 'Guardian Exam' })
+      await prepare(`UPDATE guardian_exam_orders SET checkout_request_id=?,merchant_request_id=?,updated_at=? WHERE id=? AND status='payment_pending'`).run(started.checkoutRequestId, started.merchantRequestId, now(), pending.id)
+      return sendJson(response, 202, { order: { id: pending.id, status: 'payment_pending', totalKes: Number(pending.totalKes) }, message: started.customerMessage })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Safaricom could not start this payment.'
+      if (error instanceof DarajaRequestError && error.ambiguous) {
+        await prepare(`UPDATE guardian_exam_orders SET payment_error=?,updated_at=? WHERE id=? AND status='payment_pending'`).run(message.slice(0,300), now(), pending.id)
+        return sendJson(response, 202, { order: { id: pending.id, status: 'payment_pending', totalKes: Number(pending.totalKes) }, message })
+      }
+      await prepare(`UPDATE guardian_exam_orders SET status='payment_failed',payment_error=?,updated_at=? WHERE id=? AND status='payment_pending'`).run(message.slice(0,300), now(), pending.id)
+      fail(502, 'MPESA_STK_FAILED', message)
+    }
+  }
+
+  if (path === '/api/admin/guardian-exam-pricing' && (method === 'GET' || method === 'PUT')) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const loadPricing = async () => ({
+      grades: await prepare(`SELECT grade_code AS "gradeCode",grade_label AS "gradeLabel",unit_price_kes AS "unitPriceKes",updated_at AS "updatedAt" FROM guardian_exam_pricing ORDER BY CASE grade_code WHEN 'PG' THEN 0 WHEN 'PP1' THEN 1 WHEN 'PP2' THEN 2 ELSE 3 END,grade_code`).all(),
+      deliveryFeeKes: Number((await prepare(`SELECT setting_value FROM guardian_exam_settings WHERE setting_key='delivery_fee_kes'`).get())?.setting_value ?? 300),
+    })
+    if (method === 'GET') return sendJson(response, 200, await loadPricing())
+    if (!Array.isArray(payload.grades) || payload.grades.length !== 12) fail(400, 'GUARDIAN_PRICING_INVALID', 'Provide prices for all 12 grades.')
+    const normalized = payload.grades.map((row) => ({ gradeCode: String(row?.gradeCode || ''), unitPriceKes: Number(row?.unitPriceKes) }))
+    const expectedCodes = new Set(['PG','PP1','PP2',...Array.from({length:9},(_,index)=>`GRADE_${index+1}`)])
+    if (normalized.some((row) => !expectedCodes.has(row.gradeCode) || !Number.isSafeInteger(row.unitPriceKes) || row.unitPriceKes < 0 || row.unitPriceKes > 100000) || new Set(normalized.map((row) => row.gradeCode)).size !== 12) fail(400, 'GUARDIAN_PRICING_INVALID', 'Each grade needs one whole-number price from KSh 0 to KSh 100,000.')
+    const deliveryFeeKes = Number(payload.deliveryFeeKes)
+    if (!Number.isSafeInteger(deliveryFeeKes) || deliveryFeeKes < 0 || deliveryFeeKes > 100000) fail(400, 'GUARDIAN_DELIVERY_FEE_INVALID', 'Delivery fee must be a whole-number amount from KSh 0 to KSh 100,000.')
+    const savedAt = now()
+    await db.transaction(async (tx) => {
+      for (const row of normalized) await tx.query(`UPDATE guardian_exam_pricing SET unit_price_kes=$1,updated_by=$2,updated_at=$3 WHERE grade_code=$4`, [row.unitPriceKes, auth.user.id, savedAt, row.gradeCode])
+      await tx.query(`UPDATE guardian_exam_settings SET setting_value=$1,updated_by=$2,updated_at=$3 WHERE setting_key='delivery_fee_kes'`, [deliveryFeeKes, auth.user.id, savedAt])
+    })
+    await audit('admin.guardian_exam_pricing_updated', null, auth.user.id, { grades: normalized, deliveryFeeKes })
+    return sendJson(response, 200, { ...(await loadPricing()), updatedAt: savedAt, message: 'Guardian Exams prices saved. Existing orders retain their original price snapshot.' })
+  }
+
+  if (method === 'GET' && path === '/api/admin/guardian-exam-orders') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const orders = await prepare(`SELECT id,school_name AS "schoolName",contact_name AS "contactName",email,contact_phone AS "contactPhone",county,town,delivery_address AS "deliveryAddress",grades_snapshot AS grades,total_students AS "totalStudents",subtotal_kes AS "subtotalKes",delivery_fee_kes AS "deliveryFeeKes",total_kes AS "totalKes",status,payer_phone AS "payerPhone",payment_reference AS "paymentReference",payment_error AS "paymentError",created_at AS "createdAt",paid_at AS "paidAt" FROM guardian_exam_orders ORDER BY created_at DESC LIMIT 500`).all()
+    return sendJson(response, 200, { orders })
+  }
+
+  const guardianOrderReviewMatch = path.match(/^\/api\/admin\/guardian-exam-orders\/([0-9a-f-]+)\/review$/i)
+  if (method === 'POST' && guardianOrderReviewMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const decision = payload.decision === 'paid' ? 'paid' : payload.decision === 'failed' ? 'failed' : null
+    const receipt = typeof payload.receipt === 'string' ? payload.receipt.trim().replace(/[^A-Za-z0-9]/g, '').slice(0, 32) : ''
+    const note = typeof payload.note === 'string' ? payload.note.trim().slice(0, 500) : ''
+    if (!decision || note.length < 8) fail(400, 'GUARDIAN_ORDER_REVIEW_INVALID', 'Choose an outcome and add a reconciliation note of at least 8 characters.')
+    if (decision === 'paid' && !/^[A-Za-z0-9]{6,32}$/.test(receipt)) fail(400, 'GUARDIAN_ORDER_RECEIPT_REQUIRED', 'Enter the verified M-PESA receipt before confirming payment.')
+    const order = await db.transaction(async (tx) => {
+      const current = await tx.one('SELECT id,status FROM guardian_exam_orders WHERE id=$1 FOR UPDATE', [guardianOrderReviewMatch[1]])
+      if (!current || current.status !== 'payment_review') fail(409, 'GUARDIAN_ORDER_REVIEW_NOT_AVAILABLE', 'This school order is not waiting for payment review.')
+      if (decision === 'paid') return tx.one(`UPDATE guardian_exam_orders SET status='paid',payment_reference=$1,payment_error=NULL,paid_at=$2,updated_at=$2 WHERE id=$3 RETURNING id,status,payment_reference AS "paymentReference"`, [`MPESA-${receipt}`, now(), current.id])
+      return tx.one(`UPDATE guardian_exam_orders SET status='payment_failed',payment_error=$1,updated_at=$2 WHERE id=$3 RETURNING id,status,payment_reference AS "paymentReference"`, [note, now(), current.id])
+    })
+    await audit(`admin.guardian_exam.payment_review_${decision}`, null, auth.user.id, { orderId: order.id, receipt: decision === 'paid' ? receipt : null, note })
+    return sendJson(response, 200, { order, message: decision === 'paid' ? 'Verified payment recorded.' : 'Order marked unpaid after reconciliation.' })
+  }
+
   if (method === 'GET' && path === '/api/marketplace/payment-options') {
     const mpesa = darajaConfig()
     return sendJson(response, 200, { mpesa: { enabled: mpesa.ready, environment: mpesa.ready ? mpesa.environment : null } })
+  }
+
+  if (method === 'GET' && path === '/api/marketplace/series-subjects') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Teacher'])
+    const curriculum = url.searchParams.get('curriculum')?.trim().slice(0, 80) || ''
+    const grade = url.searchParams.get('grade')?.trim().slice(0, 80) || ''
+    if (!curriculum || !grade) fail(400, 'SERIES_CHECKLIST_INPUT_REQUIRED', 'Choose a curriculum and grade to load its complete-series checklist.')
+    const subjects = await requiredMarketplaceSeriesSubjects(curriculum, grade)
+    return sendJson(response, 200, { subjects: subjects.map((subject) => subject.name), requiredSubjects: subjects.filter((subject) => subject.marketplaceRequired).map((subject) => subject.name), curriculumCode: marketplaceCurriculumCode(curriculum), grade, configured: subjects.length > 0 })
   }
 
   const mpesaCallbackMatch = path.match(/^\/api\/mpesa\/callback\/([^/]+)$/)
@@ -451,6 +744,40 @@ async function router(request, response) {
     const checkoutRequestId = typeof callback?.CheckoutRequestID === 'string' ? callback.CheckoutRequestID : ''
     const resultCode = String(callback?.ResultCode ?? '')
     if (!checkoutRequestId) return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Acknowledged' })
+    const guardianOrder = await prepare(`SELECT id,total_kes,status,payer_phone,contact_phone,email FROM guardian_exam_orders WHERE checkout_request_id=?`).get(checkoutRequestId)
+    if (guardianOrder) {
+      if (guardianOrder.status === 'paid') return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Already processed' })
+      if (resultCode !== '0') {
+        await prepare(`UPDATE guardian_exam_orders SET status='payment_failed',mpesa_result_code=?,payment_error=?,updated_at=? WHERE id=? AND status='payment_pending'`)
+          .run(resultCode.slice(0, 40), String(callback.ResultDesc || 'Payment was not completed.').slice(0, 300), now(), guardianOrder.id)
+        return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Acknowledged' })
+      }
+      const metadata = Array.isArray(callback?.CallbackMetadata?.Item) ? callback.CallbackMetadata.Item : []
+      const getMeta = (name) => metadata.find((item) => item?.Name === name)?.Value
+      const amount = Number(getMeta('Amount'))
+      const receipt = String(getMeta('MpesaReceiptNumber') || '').trim()
+      const payerPhone = normalizeMpesaPhone(getMeta('PhoneNumber'))
+      const expectedPhone = normalizeMpesaPhone(guardianOrder.payer_phone)
+      if (!receipt || !Number.isFinite(amount) || Math.round(Number(guardianOrder.total_kes)) !== Math.round(amount) || !payerPhone || payerPhone !== expectedPhone) {
+        await prepare(`UPDATE guardian_exam_orders SET status='payment_review',mpesa_result_code='CALLBACK_MISMATCH',payment_error='Payment confirmation needs administrator review.',updated_at=? WHERE id=? AND status='payment_pending'`).run(now(), guardianOrder.id)
+        await audit('guardian_exam.payment_review_required', null, null, { orderId: guardianOrder.id, receiptPresent: Boolean(receipt), amountMatched: Number.isFinite(amount) && Math.round(Number(guardianOrder.total_kes)) === Math.round(amount), phoneMatched: Boolean(payerPhone && payerPhone === expectedPhone) })
+        return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Acknowledged for review' })
+      }
+      const paymentReference = `MPESA-${receipt}`
+      const paidOrder = await prepare(`UPDATE guardian_exam_orders SET status='paid',payment_reference=?,payment_error=NULL,mpesa_result_code='0',paid_at=?,updated_at=? WHERE id=? AND status='payment_pending' RETURNING id`)
+        .get(paymentReference, now(), now(), guardianOrder.id)
+      if (!paidOrder) return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Already processed' })
+      await audit('guardian_exam.order_paid', null, null, { orderId: guardianOrder.id, paymentReference, amountKes: amount })
+      if (guardianOrder.email && otpDelivery === 'resend') {
+        try { await sendGuardianOrderReceipt({ to: guardianOrder.email, orderId: guardianOrder.id, receipt, amountKes: amount }) }
+        catch (error) { console.error('Guardian exam order receipt email could not be delivered:', error instanceof Error ? error.message : 'unknown email error') }
+      }
+      if (guardianOrder.contact_phone && mobileSasaReady()) {
+        try { await sendGuardianPaymentReceiptSms({ to: guardianOrder.contact_phone, orderId: guardianOrder.id, receipt, amountKes: amount }) }
+        catch (error) { console.error('Guardian exam order receipt SMS could not be delivered:', error instanceof Error ? error.message : 'unknown SMS error') }
+      }
+      return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Accepted' })
+    }
     const order = await prepare(`SELECT id,buyer_user_id,total_kes,status,payer_phone FROM marketplace_orders WHERE checkout_request_id=?`).get(checkoutRequestId)
     if (!order) return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Acknowledged' })
     if (order.status === 'paid') return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Already processed' })
@@ -1012,7 +1339,7 @@ async function router(request, response) {
     const grade = url.searchParams.get('grade')?.trim().slice(0, 80) || null
     const subject = url.searchParams.get('subject')?.trim().slice(0, 120) || null
     const limit = Math.min(Math.max(Number.parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100)
-    const filters = [`s.status='approved'`]
+    const filters = [`s.status='approved'`, `s.file_storage_key IS NOT NULL`]
     const values = []
     for (const [column, value] of [['curriculum', curriculum], ['level', level], ['grade', grade], ['subject', subject]]) {
       if (value) { values.push(value); filters.push(`s.${column}=$${values.length}`) }
@@ -1021,8 +1348,8 @@ async function router(request, response) {
     values.push(limit)
     const products = await db.many(`SELECT s.id,s.title,s.description,s.curriculum,s.level,s.grade,s.subject,s.academic_year AS "academicYear",
       s.term,s.assessment_type AS "assessmentType",s.resource,s.page_count AS "pageCount",s.question_count AS "questionCount",
-      s.formats,s.price_kes AS "priceKes",i.name AS "institutionName",u.full_name AS "vendorName",s.published_at AS "publishedAt"
-      FROM marketplace_submissions s JOIN institutions i ON i.id=s.institution_id JOIN users u ON u.id=s.teacher_user_id
+      s.formats,CASE WHEN s.product_type='series' THEN COALESCE(gp.unit_price_kes,s.price_kes) ELSE s.price_kes END AS "priceKes",s.product_type AS "productType",s.included_subjects AS "includedSubjects",i.name AS "institutionName",u.full_name AS "vendorName",s.published_at AS "publishedAt"
+      FROM marketplace_submissions s LEFT JOIN guardian_exam_pricing gp ON upper(gp.grade_label)=upper(s.grade) JOIN institutions i ON i.id=s.institution_id JOIN users u ON u.id=s.teacher_user_id
       WHERE ${filters.join(' AND ')} ORDER BY s.published_at DESC,s.id DESC LIMIT $${values.length}`, values)
     return sendJson(response, 200, { products })
   }
@@ -1031,18 +1358,19 @@ async function router(request, response) {
   if (method === 'GET' && catalogProductMatch) {
     const product = await prepare(`SELECT s.id,s.title,s.description,s.curriculum,s.level,s.grade,s.subject,s.academic_year AS "academicYear",
       s.term,s.assessment_type AS "assessmentType",s.resource,s.page_count AS "pageCount",s.question_count AS "questionCount",
-      s.formats,s.price_kes AS "priceKes",i.name AS "institutionName",u.full_name AS "vendorName",s.published_at AS "publishedAt"
-      FROM marketplace_submissions s JOIN institutions i ON i.id=s.institution_id JOIN users u ON u.id=s.teacher_user_id
-      WHERE s.id=? AND s.status='approved'`).get(catalogProductMatch[1])
+      s.formats,CASE WHEN s.product_type='series' THEN COALESCE(gp.unit_price_kes,s.price_kes) ELSE s.price_kes END AS "priceKes",s.product_type AS "productType",s.included_subjects AS "includedSubjects",i.name AS "institutionName",u.full_name AS "vendorName",s.published_at AS "publishedAt"
+      FROM marketplace_submissions s LEFT JOIN guardian_exam_pricing gp ON upper(gp.grade_label)=upper(s.grade) JOIN institutions i ON i.id=s.institution_id JOIN users u ON u.id=s.teacher_user_id
+      WHERE s.id=? AND s.status='approved' AND s.file_storage_key IS NOT NULL`).get(catalogProductMatch[1])
     if (!product) fail(404, 'PRODUCT_NOT_FOUND', 'That approved marketplace resource was not found.')
     return sendJson(response, 200, { product })
   }
 
   if (method === 'GET' && path === '/api/marketplace/orders') {
     const auth = await getAuth(request)
-    requireRole(auth, ['Learner', 'Parent'])
-    const orders = await prepare(`SELECT o.id,o.status,o.total_kes AS "totalKes",o.payment_method AS "paymentMethod",o.payment_reference AS "paymentReference",
-      o.is_simulated_payment AS "isSimulatedPayment",o.created_at AS "createdAt",o.paid_at AS "paidAt",COUNT(i.id)::int AS "itemCount"
+    requireRole(auth, ['Learner', 'Parent', 'School admin'])
+    const orders = await prepare(`SELECT o.id,o.status,o.total_kes AS "totalKes",o.delivery_fee_kes AS "deliveryFeeKes",o.recipient_name AS "recipientName",o.recipient_phone AS "recipientPhone",o.delivery_address AS "deliveryAddress",o.fulfillment_status AS "fulfillmentStatus",o.carrier_name AS "carrierName",o.tracking_code AS "trackingCode",o.tracking_url AS "trackingUrl",o.payment_method AS "paymentMethod",o.payment_reference AS "paymentReference",
+      o.is_simulated_payment AS "isSimulatedPayment",o.created_at AS "createdAt",o.paid_at AS "paidAt",
+      COALESCE(json_agg(json_build_object('title',i.title_snapshot,'unitPriceKes',i.unit_price_kes,'quantity',i.quantity,'productType',i.product_type)) FILTER (WHERE i.id IS NOT NULL),'[]'::json) AS items
       FROM marketplace_orders o LEFT JOIN marketplace_order_items i ON i.order_id=o.id
       WHERE o.buyer_user_id=? GROUP BY o.id ORDER BY o.created_at DESC LIMIT 100`).all(auth.user.id)
     return sendJson(response, 200, { orders })
@@ -1050,40 +1378,53 @@ async function router(request, response) {
 
   if (method === 'POST' && path === '/api/marketplace/orders') {
     const auth = await getAuth(request)
-    requireRole(auth, ['Learner', 'Parent'])
+    requireRole(auth, ['Learner', 'Parent', 'School admin'])
     rateLimit(request, 'marketplace-order', 10, 60_000, auth.user.id)
-    const productIds = Array.isArray(payload.productIds) ? [...new Set(payload.productIds.filter((id) => typeof id === 'string'))] : []
+    const requestedItems = Array.isArray(payload.items) ? payload.items : []
+    const productIds = requestedItems.length ? [...new Set(requestedItems.map((item) => item?.productId).filter((id) => typeof id === 'string'))] : Array.isArray(payload.productIds) ? [...new Set(payload.productIds.filter((id) => typeof id === 'string'))] : []
     if (!productIds.length || productIds.length > 20 || productIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))) fail(400, 'ORDER_ITEMS_INVALID', 'Select between 1 and 20 valid marketplace products.')
-    const products = await db.many(`SELECT id,teacher_user_id AS "sellerUserId",title,price_kes AS "priceKes"
-      FROM marketplace_submissions WHERE status='approved' AND id=ANY($1::uuid[])`, [productIds])
+    const recipientName = typeof payload.recipientName === 'string' ? payload.recipientName.trim().slice(0, 160) : ''
+    const recipientPhone = normalizeMpesaPhone(payload.recipientPhone)
+    const deliveryAddress = typeof payload.deliveryAddress === 'string' ? payload.deliveryAddress.trim().slice(0, 500) : ''
+    if (recipientName.length < 2 || !recipientPhone || deliveryAddress.length < 5) fail(400, 'DELIVERY_DETAILS_REQUIRED', 'Enter the recipient name, a valid Kenyan phone number, and a delivery address.')
+    const products = await db.many(`SELECT s.id,s.teacher_user_id AS "sellerUserId",s.title,s.file_storage_key AS "fileStorageKey",s.uploaded_file_name AS "fileName",s.file_mime_type AS "fileMimeType",
+      CASE WHEN s.product_type='series' THEN COALESCE(gp.unit_price_kes,s.price_kes) ELSE s.price_kes END AS "priceKes",s.product_type AS "productType"
+      FROM marketplace_submissions s LEFT JOIN guardian_exam_pricing gp ON upper(gp.grade_label)=upper(s.grade)
+      WHERE s.status='approved' AND s.file_storage_key IS NOT NULL AND s.id=ANY($1::uuid[])`, [productIds])
     if (products.length !== productIds.length) fail(409, 'PRODUCTS_UNAVAILABLE', 'One or more selected products are no longer available.')
     if (products.some((product) => product.sellerUserId === auth.user.id)) fail(409, 'OWN_PRODUCT_ORDER', 'You cannot purchase your own marketplace resource.')
     const orderId = randomUUID()
     const createdAt = now()
     const items = products.map((product) => {
+      const quantity = Math.max(1, Math.min(1000, Number(requestedItems.find((item) => item?.productId === product.id)?.quantity || 1)))
+      if (!Number.isInteger(quantity)) fail(400, 'ORDER_QUANTITY_INVALID', 'Enter a whole number quantity for each product.')
       const price = Math.round(Number(product.priceKes) * 100) / 100
-      const sellerAmount = Math.round(price * marketplaceVendorSharePercent) / 100
-      return { ...product, price, sellerAmount, platformAmount: Math.round((price - sellerAmount) * 100) / 100 }
+      const lineTotal = Math.round(price * quantity * 100) / 100
+      const sellerAmount = Math.round(lineTotal * marketplaceVendorSharePercent) / 100
+      return { ...product, price, quantity, sellerAmount, platformAmount: Math.round((lineTotal - sellerAmount) * 100) / 100 }
     })
-    const totalKes = Math.round(items.reduce((sum, item) => sum + item.price, 0) * 100) / 100
+    const deliveryFeeSetting = await db.one(`SELECT setting_value FROM guardian_exam_settings WHERE setting_key='delivery_fee_kes'`)
+    const deliveryFeeKes = Math.max(0, Number(deliveryFeeSetting?.setting_value ?? 300))
+    const subtotalKes = Math.round(items.reduce((sum, item) => sum + item.price * item.quantity, 0) * 100) / 100
+    const totalKes = subtotalKes + deliveryFeeKes
     await db.transaction(async (tx) => {
-      await tx.query(`INSERT INTO marketplace_orders(id,buyer_user_id,total_kes,created_at) VALUES($1,$2,$3,$4)`, [orderId, auth.user.id, totalKes, createdAt])
-      for (const item of items) await tx.query(`INSERT INTO marketplace_order_items(order_id,submission_id,seller_user_id,title_snapshot,unit_price_kes,seller_share_percent,seller_amount_kes,platform_amount_kes,created_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [orderId, item.id, item.sellerUserId, item.title, item.price, marketplaceVendorSharePercent, item.sellerAmount, item.platformAmount, createdAt])
-      await tx.query(`INSERT INTO audit_events(id,actor_user_id,action,details_json,created_at) VALUES($1,$2,'marketplace.order_created',$3::jsonb,$4)`, [randomUUID(), auth.user.id, JSON.stringify({ orderId, productCount: items.length, totalKes, simulatedCheckout: true }), createdAt])
+      await tx.query(`INSERT INTO marketplace_orders(id,buyer_user_id,total_kes,delivery_fee_kes,recipient_name,recipient_phone,delivery_address,whatsapp_updates_opt_in,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [orderId, auth.user.id, totalKes, deliveryFeeKes, recipientName, recipientPhone, deliveryAddress, payload.whatsappUpdatesOptIn === true, createdAt])
+      for (const item of items) await tx.query(`INSERT INTO marketplace_order_items(order_id,submission_id,seller_user_id,title_snapshot,unit_price_kes,quantity,product_type,file_storage_key_snapshot,file_name_snapshot,file_mime_type_snapshot,seller_share_percent,seller_amount_kes,platform_amount_kes,created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [orderId, item.id, item.sellerUserId, item.title, item.price, item.quantity, item.productType, item.fileStorageKey, item.fileName, item.fileMimeType, marketplaceVendorSharePercent, item.sellerAmount, item.platformAmount, createdAt])
+      await tx.query(`INSERT INTO audit_events(id,actor_user_id,action,details_json,created_at) VALUES($1,$2,'marketplace.order_created',$3::jsonb,$4)`, [randomUUID(), auth.user.id, JSON.stringify({ orderId, productCount: items.length, subtotalKes, deliveryFeeKes, totalKes, physicalDelivery: true }), createdAt])
     })
-    return sendJson(response, 201, { order: { id: orderId, status: 'awaiting_payment', totalKes, currency: 'KES', isSimulatedPayment: true, items: items.map(({ id, title, price }) => ({ productId: id, title, priceKes: price })), message: 'Demo checkout prepared. No payment has been requested or charged.' } })
+    return sendJson(response, 201, { order: { id: orderId, status: 'awaiting_payment', totalKes, subtotalKes, deliveryFeeKes, currency: 'KES', isSimulatedPayment: true, items: items.map(({ id, title, price, quantity, productType }) => ({ productId: id, title, priceKes: price, quantity, productType })), message: 'Order prepared. Payment has not been requested or charged.' } })
   }
 
   const orderMatch = path.match(/^\/api\/marketplace\/orders\/([0-9a-f-]+)$/i)
   if (method === 'GET' && orderMatch) {
     const auth = await getAuth(request)
-    requireRole(auth, ['Learner', 'Parent'])
-    const order = await prepare(`SELECT id,status,total_kes AS "totalKes",payment_method AS "paymentMethod",payment_reference AS "paymentReference",
+    requireRole(auth, ['Learner', 'Parent', 'School admin'])
+    const order = await prepare(`SELECT id,status,total_kes AS "totalKes",delivery_fee_kes AS "deliveryFeeKes",recipient_name AS "recipientName",recipient_phone AS "recipientPhone",delivery_address AS "deliveryAddress",fulfillment_status AS "fulfillmentStatus",carrier_name AS "carrierName",tracking_code AS "trackingCode",tracking_url AS "trackingUrl",payment_method AS "paymentMethod",payment_reference AS "paymentReference",
       is_simulated_payment AS "isSimulatedPayment",payment_error AS "paymentError",created_at AS "createdAt",paid_at AS "paidAt"
       FROM marketplace_orders WHERE id=? AND buyer_user_id=?`).get(orderMatch[1], auth.user.id)
     if (!order) fail(404, 'ORDER_NOT_FOUND', 'That order was not found.')
-    order.items = await prepare(`SELECT id,submission_id AS "productId",title_snapshot AS title,unit_price_kes AS "priceKes"
+    order.items = await prepare(`SELECT id,submission_id AS "productId",title_snapshot AS title,unit_price_kes AS "priceKes",quantity,product_type AS "productType"
       FROM marketplace_order_items WHERE order_id=? ORDER BY created_at`).all(order.id)
     return sendJson(response, 200, { order })
   }
@@ -1091,7 +1432,7 @@ async function router(request, response) {
   const mpesaStartMatch = path.match(/^\/api\/marketplace\/orders\/([0-9a-f-]+)\/mpesa\/stk$/i)
   if (method === 'POST' && mpesaStartMatch) {
     const auth = await getAuth(request)
-    requireRole(auth, ['Learner', 'Parent'])
+    requireRole(auth, ['Learner', 'Parent', 'School admin'])
     rateLimit(request, 'marketplace-mpesa-stk', 4, 60_000, auth.user.id)
     if (!darajaConfig().ready) fail(503, 'MPESA_NOT_CONFIGURED', 'M-PESA checkout is not available yet. Please try again later.')
     const phone = normalizeMpesaPhone(payload.phone)
@@ -1126,7 +1467,7 @@ async function router(request, response) {
   const simulatePaymentMatch = path.match(/^\/api\/marketplace\/orders\/([0-9a-f-]+)\/simulate-payment$/i)
   if (method === 'POST' && simulatePaymentMatch) {
     const auth = await getAuth(request)
-    requireRole(auth, ['Learner', 'Parent'])
+    requireRole(auth, ['Learner', 'Parent', 'School admin'])
     rateLimit(request, 'marketplace-simulated-payment', 10, 60_000, auth.user.id)
     const paidAt = now()
     const paymentReference = `DEMO-${randomUUID().slice(0, 12).toUpperCase()}`
@@ -1136,7 +1477,7 @@ async function router(request, response) {
       if (!current.is_simulated_payment) fail(409, 'SIMULATION_DISABLED', 'This order uses live payment and cannot be marked paid by the demo action.')
       if (current.status !== 'awaiting_payment') fail(409, 'ORDER_NOT_PAYABLE', 'This order is not awaiting simulated payment.')
       const items = await tx.many(`SELECT * FROM marketplace_order_items WHERE order_id=$1 ORDER BY seller_user_id,id`, [current.id])
-      await tx.query(`UPDATE marketplace_orders SET status='paid',payment_method='mpesa_demo',payment_reference=$1,paid_at=$2,updated_at=$2 WHERE id=$3`, [paymentReference, paidAt, current.id])
+      await tx.query(`UPDATE marketplace_orders SET status='paid',fulfillment_status='processing',payment_method='mpesa_demo',payment_reference=$1,paid_at=$2,updated_at=$2 WHERE id=$3`, [paymentReference, paidAt, current.id])
       for (const item of items) {
         await tx.query(`INSERT INTO seller_settlements(order_item_id,seller_user_id,amount_kes,created_at) VALUES($1,$2,$3,$4)
           ON CONFLICT(order_item_id) DO NOTHING`, [item.id, item.seller_user_id, item.seller_amount_kes, paidAt])
@@ -1201,9 +1542,9 @@ async function router(request, response) {
   if (method === 'GET' && path === '/api/teacher/marketplace-submissions') {
     const auth = await getAuth(request)
     requireRole(auth, ['Teacher'])
-    const submissions = await prepare(`SELECT id,title,description,curriculum,level,grade,subject,academic_year AS "year",term,
-      assessment_type AS "type",resource,page_count AS pages,question_count AS questions,formats,price_kes AS price,
-      sample_file_label AS "fileName",rights_confirmed AS "rightsConfirmed",status,review_note AS "reviewNote",
+    const submissions = await prepare(`SELECT id,title,description,curriculum,level,grade,subject,product_type AS "productType",included_subjects AS "includedSubjects",academic_year AS "year",term,
+      assessment_type AS "type",resource,page_count AS pages,question_count AS questions,formats,CASE WHEN product_type='series' THEN COALESCE((SELECT unit_price_kes FROM guardian_exam_pricing WHERE upper(grade_label)=upper(marketplace_submissions.grade)),price_kes) ELSE price_kes END AS price,
+      uploaded_file_name AS "fileName",file_mime_type AS "fileMimeType",file_size_bytes AS "fileSizeBytes",(file_storage_key IS NOT NULL) AS "fileUploaded",rights_confirmed AS "rightsConfirmed",status,review_note AS "reviewNote",
       submitted_at AS "submittedAt",created_at AS "createdAt",updated_at AS "updatedAt"
       FROM marketplace_submissions WHERE teacher_user_id=? ORDER BY updated_at DESC`).all(auth.user.id)
     return sendJson(response, 200, { submissions })
@@ -1215,11 +1556,11 @@ async function router(request, response) {
     if (!auth.context.institutionId) fail(403, 'INSTITUTION_REQUIRED', 'Select an institution role before submitting marketplace content.')
     const fields = marketplaceSubmissionFields(payload)
     const created = await prepare(`INSERT INTO marketplace_submissions(teacher_user_id,institution_id,title,description,curriculum,level,grade,subject,
-      academic_year,term,assessment_type,resource,page_count,question_count,formats,price_kes,sample_file_label,rights_confirmed)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id,status,created_at AS "createdAt"`).get(
+      academic_year,term,assessment_type,resource,page_count,question_count,formats,price_kes,sample_file_label,rights_confirmed,product_type,included_subjects)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb) RETURNING id,status,created_at AS "createdAt"`).get(
       auth.user.id, auth.context.institutionId, fields.title, fields.description, fields.curriculum, fields.level, fields.grade, fields.subject,
       fields.academicYear, fields.term, fields.assessmentType, fields.resource, fields.pageCount, fields.questionCount, JSON.stringify(fields.formats),
-      fields.priceKes, fields.sampleFileLabel, fields.rightsConfirmed)
+      fields.priceKes, null, fields.rightsConfirmed, fields.productType, JSON.stringify(fields.includedSubjects))
     await audit('marketplace.submission_draft_created', auth.user.id, auth.user.id, { submissionId: created.id, institutionId: auth.context.institutionId })
     return sendJson(response, 201, { submission: created })
   }
@@ -1230,12 +1571,12 @@ async function router(request, response) {
     requireRole(auth, ['Teacher'])
     const fields = marketplaceSubmissionFields(payload)
     const updated = await prepare(`UPDATE marketplace_submissions SET title=?,description=?,curriculum=?,level=?,grade=?,subject=?,academic_year=?,term=?,
-      assessment_type=?,resource=?,page_count=?,question_count=?,formats=?::jsonb,price_kes=?,sample_file_label=?,rights_confirmed=?,updated_at=?
+      assessment_type=?,resource=?,page_count=?,question_count=?,formats=?::jsonb,price_kes=?,sample_file_label=NULL,rights_confirmed=?,product_type=?,included_subjects=?::jsonb,updated_at=?
       WHERE id=? AND teacher_user_id=? AND status IN ('draft','changes_requested')
       RETURNING id,status,review_note AS "reviewNote",updated_at AS "updatedAt"`).get(
       fields.title, fields.description, fields.curriculum, fields.level, fields.grade, fields.subject, fields.academicYear, fields.term,
       fields.assessmentType, fields.resource, fields.pageCount, fields.questionCount, JSON.stringify(fields.formats), fields.priceKes,
-      fields.sampleFileLabel, fields.rightsConfirmed, now(), teacherSubmissionMatch[1], auth.user.id)
+      fields.rightsConfirmed, fields.productType, JSON.stringify(fields.includedSubjects), now(), teacherSubmissionMatch[1], auth.user.id)
     if (!updated) fail(404, 'EDITABLE_SUBMISSION_NOT_FOUND', 'That submission is not editable or does not belong to your account.')
     await audit('marketplace.submission_updated', auth.user.id, auth.user.id, { submissionId: updated.id })
     return sendJson(response, 200, { submission: updated })
@@ -1245,9 +1586,12 @@ async function router(request, response) {
   if (method === 'POST' && teacherSubmitMatch) {
     const auth = await getAuth(request)
     requireRole(auth, ['Teacher'])
-    const existing = await prepare(`SELECT id,rights_confirmed AS "rightsConfirmed",status FROM marketplace_submissions WHERE id=? AND teacher_user_id=?`).get(teacherSubmitMatch[1], auth.user.id)
+    const existing = await prepare(`SELECT id,rights_confirmed AS "rightsConfirmed",status,product_type AS "productType",included_subjects AS "includedSubjects",curriculum,grade,file_storage_key AS "fileStorageKey"
+      FROM marketplace_submissions WHERE id=? AND teacher_user_id=?`).get(teacherSubmitMatch[1], auth.user.id)
     if (!existing || !['draft', 'changes_requested'].includes(existing.status)) fail(409, 'SUBMISSION_NOT_READY', 'This submission cannot be sent for review in its current state.')
     if (!existing.rightsConfirmed) fail(400, 'RIGHTS_CONFIRMATION_REQUIRED', 'Confirm that you have the rights to sell this material before submitting.')
+    if (!existing.fileStorageKey) fail(400, 'PRINT_MASTER_REQUIRED', 'Upload the actual PDF or ZIP print master before submitting for review.')
+    await assertCompleteMarketplaceSeries(existing)
     const submitted = await prepare(`UPDATE marketplace_submissions SET status='submitted',submitted_at=?,updated_at=?,review_note=NULL,reviewed_by=NULL,reviewed_at=NULL
       WHERE id=? AND teacher_user_id=? RETURNING id,status,submitted_at AS "submittedAt"`).get(now(), now(), existing.id, auth.user.id)
     await audit('marketplace.submission_sent_for_review', auth.user.id, auth.user.id, { submissionId: existing.id, institutionId: auth.context.institutionId })
@@ -1406,11 +1750,11 @@ async function router(request, response) {
     const status = url.searchParams.get('status') || 'submitted'
     if (!['submitted', 'approved', 'changes_requested', 'rejected', 'all'].includes(status)) fail(400, 'SUBMISSION_STATUS_INVALID', 'Choose a valid moderation status.')
     const submissions = await prepare(`SELECT s.id,s.teacher_user_id AS "teacherUserId",u.full_name AS "teacherName",u.email AS "teacherEmail",
-      i.id AS "institutionId",i.name AS "institutionName",s.title,s.description,s.curriculum,s.level,s.grade,s.subject,
+      i.id AS "institutionId",i.name AS "institutionName",s.title,s.description,s.curriculum,s.level,s.grade,s.subject,s.product_type AS "productType",s.included_subjects AS "includedSubjects",
       s.academic_year AS "year",s.term,s.assessment_type AS "type",s.resource,s.page_count AS pages,s.question_count AS questions,
-      s.formats,s.price_kes AS price,s.sample_file_label AS "fileName",s.rights_confirmed AS "rightsConfirmed",s.status,
+      s.formats,CASE WHEN s.product_type='series' THEN COALESCE(gp.unit_price_kes,s.price_kes) ELSE s.price_kes END AS price,s.uploaded_file_name AS "fileName",s.file_mime_type AS "fileMimeType",s.file_size_bytes AS "fileSizeBytes",(s.file_storage_key IS NOT NULL) AS "fileUploaded",s.rights_confirmed AS "rightsConfirmed",s.status,
       s.review_note AS "reviewNote",s.submitted_at AS "submittedAt",s.reviewed_at AS "reviewedAt",s.created_at AS "createdAt"
-      FROM marketplace_submissions s JOIN users u ON u.id=s.teacher_user_id JOIN institutions i ON i.id=s.institution_id
+      FROM marketplace_submissions s LEFT JOIN guardian_exam_pricing gp ON upper(gp.grade_label)=upper(s.grade) JOIN users u ON u.id=s.teacher_user_id JOIN institutions i ON i.id=s.institution_id
       WHERE (?='all' OR s.status=?) ORDER BY s.submitted_at DESC NULLS LAST,s.created_at DESC LIMIT 250`).all(status, status)
     return sendJson(response, 200, { submissions })
   }
@@ -1516,6 +1860,13 @@ async function router(request, response) {
     const reviewNote = typeof payload.reviewNote === 'string' ? payload.reviewNote.trim().slice(0, 1500) : ''
     if (!['approved', 'changes_requested', 'rejected'].includes(status)) fail(400, 'REVIEW_DECISION_INVALID', 'Choose approve, request changes or reject.')
     if (status !== 'approved' && reviewNote.length < 10) fail(400, 'REVIEW_NOTE_REQUIRED', 'Add at least 10 characters explaining the requested changes or rejection.')
+    if (status === 'approved') {
+      const candidate = await db.one(`SELECT product_type AS "productType",included_subjects AS "includedSubjects",curriculum,grade,file_storage_key AS "fileStorageKey"
+        FROM marketplace_submissions WHERE id=$1 AND status='submitted'`, [marketplaceReviewMatch[1]])
+      if (!candidate) fail(404, 'PENDING_SUBMISSION_NOT_FOUND', 'That marketplace submission is not waiting for review.')
+      if (!candidate.fileStorageKey) fail(400, 'PRINT_MASTER_REQUIRED', 'A real PDF or ZIP print master must be uploaded before approval.')
+      await assertCompleteMarketplaceSeries(candidate)
+    }
     const reviewedAt = now()
     const reviewed = await prepare(`UPDATE marketplace_submissions SET status=?,review_note=?,reviewed_by=?,reviewed_at=?,
       published_at=CASE WHEN ?='approved' THEN CAST(? AS timestamptz) ELSE NULL END,updated_at=?
@@ -1715,7 +2066,7 @@ const server = createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Credentials', 'true')
     response.setHeader('Vary', 'Origin')
   }
-  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS')
+  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (request.method === 'OPTIONS') { response.writeHead(204); return response.end() }
   try { await router(request, response) }

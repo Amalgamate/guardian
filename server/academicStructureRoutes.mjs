@@ -30,9 +30,22 @@ export async function handleAcademicStructureRequest(context) {
       db.many(`SELECT g.id,g.level_id AS "levelId",l.name AS "levelName",c.id AS "curriculumId",c.name AS "curriculumName",g.name,g.sort_order AS "sortOrder",g.status FROM academic_grades g JOIN academic_levels l ON l.id=g.level_id JOIN academic_curricula c ON c.id=l.curriculum_id ORDER BY c.name,l.sort_order,g.sort_order,g.name`),
       db.many(`SELECT s.id,s.curriculum_id AS "curriculumId",c.name AS "curriculumName",s.code,s.name,s.status FROM academic_subjects s JOIN academic_curricula c ON c.id=s.curriculum_id ORDER BY c.name,s.name`),
       db.many(`SELECT t.id,t.curriculum_id AS "curriculumId",c.name AS "curriculumName",t.name,t.sort_order AS "sortOrder",t.status FROM academic_terms t JOIN academic_curricula c ON c.id=t.curriculum_id ORDER BY c.name,t.sort_order,t.name`),
-      db.many(`SELECT gs.grade_id AS "gradeId",gs.subject_id AS "subjectId" FROM academic_grade_subjects gs`),
+      db.many(`SELECT gs.grade_id AS "gradeId",gs.subject_id AS "subjectId",gs.marketplace_required AS "marketplaceRequired" FROM academic_grade_subjects gs`),
     ])
     sendJson(response, 200, { curricula, levels, grades, subjects, terms, gradeSubjects })
+    return true
+  }
+
+  const marketplaceRequiredMatch = path.match(/^\/api\/admin\/academic-structure\/grades\/([0-9a-f-]+)\/marketplace-subjects\/([0-9a-f-]+)$/i)
+  if (method === 'PATCH' && marketplaceRequiredMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (typeof payload.required !== 'boolean') fail(400, 'MARKETPLACE_SUBJECT_FLAG_INVALID', 'Set required to true or false.')
+    const [gradeId, subjectId] = [marketplaceRequiredMatch[1], marketplaceRequiredMatch[2]]
+    const updated = await prepare(`UPDATE academic_grade_subjects SET marketplace_required=? WHERE grade_id=? AND subject_id=? RETURNING grade_id AS "gradeId",subject_id AS "subjectId",marketplace_required AS "marketplaceRequired"`).get(payload.required, gradeId, subjectId)
+    if (!updated) fail(404, 'GRADE_SUBJECT_LINK_NOT_FOUND', 'That subject is not linked to the selected grade.')
+    await audit('admin.marketplace_series_requirement_updated', null, auth.user.id, updated)
+    sendJson(response, 200, { gradeSubject: updated })
     return true
   }
 

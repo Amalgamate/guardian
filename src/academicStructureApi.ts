@@ -17,7 +17,7 @@ export type AcademicStructure = {
   grades: AcademicRecord[]
   subjects: AcademicRecord[]
   terms: AcademicRecord[]
-  gradeSubjects: Array<{ gradeId: string; subjectId: string }>
+  gradeSubjects: Array<{ gradeId: string; subjectId: string; marketplaceRequired: boolean }>
 }
 
 export type AcademicKind = keyof Pick<AcademicStructure, 'curricula' | 'levels' | 'grades' | 'subjects' | 'terms'>
@@ -40,4 +40,5 @@ export const academicStructureApi = {
   create: (kind: AcademicKind, input: Record<string, string | number | null>) => request<{ record: AcademicRecord }>(`/api/admin/academic-structure/${kind}`, 'POST', input),
   update: (kind: AcademicKind, id: string, input: Record<string, string | number | null>) => request<{ record: AcademicRecord }>(`/api/admin/academic-structure/${kind}/${id}`, 'PATCH', input),
   archive: (kind: AcademicKind, id: string) => request<{ record: AcademicRecord }>(`/api/admin/academic-structure/${kind}/${id}`, 'DELETE'),
+  setMarketplaceSubjectRequired: (gradeId: string, subjectId: string, required: boolean) => request<{ gradeSubject: { gradeId: string; subjectId: string; marketplaceRequired: boolean } }>(`/api/admin/academic-structure/grades/${encodeURIComponent(gradeId)}/marketplace-subjects/${encodeURIComponent(subjectId)}`, 'PATCH', { required }),
 }
