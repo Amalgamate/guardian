@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, GraduationCap, MapPin, School, Truck, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, GraduationCap, MapPin, School, Truck } from 'lucide-react'
 
 type GradePrice = { gradeCode: string; gradeLabel: string; unitPriceKes: number }
 type OrderLine = GradePrice & { quantity: number; subtotalKes: number }
@@ -82,9 +82,9 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
   }
   const retryPayment = () => { setPaymentStarted(false); setOrderStatus('payment_failed'); setError(''); setStep('review') }
 
-  return <div className="guardian-preorder-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && step !== 'waiting') onClose() }}>
-    <section className="guardian-preorder-dialog" role="dialog" aria-modal="true" aria-labelledby="guardian-preorder-title">
-      {step !== 'waiting' && <button className="guardian-preorder-close" onClick={onClose} aria-label="Close preorder"><X size={19}/></button>}
+  return <main className="guardian-preorder-page">
+    <section className="guardian-preorder-dialog" aria-labelledby="guardian-preorder-title">
+      {step !== 'waiting' && <button className="guardian-preorder-close" onClick={onClose} aria-label="Back to Guardian Exams"><ArrowLeft size={19}/><span>Back to Guardian Exams</span></button>}
       <div className="guardian-preorder-heading"><span className="guardian-preorder-icon"><GraduationCap size={22}/></span><span className="guardian-preorder-step">{step === 'details' ? 'SCHOOL EXAM ORDER' : step === 'complete' ? 'ORDER CONFIRMED' : 'CHECKOUT'}</span><h2 id="guardian-preorder-title">{step === 'complete' ? 'Payment confirmed.' : 'Order Guardian Exams'}</h2><p>2027 Term 1 Midterm Exam · grade packs priced per student</p></div>
 
       {step === 'details' && <form className="guardian-preorder-form" onSubmit={createOrder}>
@@ -120,5 +120,5 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
 
       {step === 'complete' && savedOrder && <div className="guardian-preorder-complete"><span className="guardian-preorder-success-icon"><Check size={26}/></span><p>Payment confirmed for <b>{order.school}</b>. Your school order is recorded.</p><div><span>Order</span><b>{savedOrder.id}</b><span>Students</span><b>{savedOrder.totalStudents} across {savedOrder.grades.length} grades</b><span>Exam packs</span><b>{money(savedOrder.subtotalKes)}</b><span>Delivery</span><b>{money(savedOrder.deliveryFeeKes)}</b><span>Paid</span><b>{money(savedOrder.totalKes)}</b><span>M-PESA receipt</span><b>{savedOrder.paymentReference || 'Confirmed'}</b></div><small>We’ve saved the grade quantities, delivery details and price breakdown with your order.</small><button className="guardian-preorder-primary" onClick={onClose}>Done <Check size={16}/></button></div>}
     </section>
-  </div>
+  </main>
 }

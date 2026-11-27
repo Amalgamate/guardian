@@ -24,3 +24,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Private marketplace print masters
+private-marketplace-files/

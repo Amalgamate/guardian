@@ -33,6 +33,27 @@ async function api(method, path, body, cookie) {
   return { status: res.status, json, cookie: sessionCookie ? `guardian_session=${sessionCookie[1]}` : cookie }
 }
 
+async function uploadFile(path, filename, fileBytes, cookie) {
+  const headers = { 'Content-Type': 'application/pdf', Origin: WEB_ORIGIN, 'Content-Length': String(fileBytes.length) }
+  if (cookie) headers.Cookie = cookie
+  const res = await fetch(`${API}${path}?filename=${encodeURIComponent(filename)}`, {
+    method: 'PUT',
+    headers,
+    body: fileBytes,
+  })
+  const setCookie = res.headers.get('set-cookie') || ''
+  const sessionCookie = setCookie.match(/guardian_session=([^;]+)/)
+  const text = await res.text()
+  let json
+  try { json = JSON.parse(text) } catch { json = { rawText: text } }
+  return { status: res.status, json, cookie: sessionCookie ? `guardian_session=${sessionCookie[1]}` : cookie }
+}
+
+function minimalPdf() {
+  const body = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n156\n%%EOF`)
+  return body
+}
+
 async function login(identifier, password, role) {
   const res = await api('POST', '/api/auth/login', { identifier, password, role })
   if (res.status !== 200) {
@@ -85,8 +106,28 @@ async function registerAndVerify(fullName, email, password, role) {
 import { createDatabase } from './server/db.mjs'
 import { scrypt as scryptCallback, randomBytes as rb, randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
 const scrypt = promisify(scryptCallback)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+async function loadEnv(path) {
+  try {
+    const content = await readFile(path, 'utf8')
+    for (const line of content.split(/\r?\n/)) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
+      if (!match || Object.hasOwn(process.env, match[1])) continue
+      let value = match[2]
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1)
+      process.env[match[1]] = value
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error }
+}
+
+await loadEnv(resolve(__dirname, '.env'))
 
 async function hashPassword(password) {
   const salt = rb(16).toString('hex')
@@ -95,6 +136,45 @@ async function hashPassword(password) {
 }
 
 const db = createDatabase({ connectionString: process.env.DATABASE_URL })
+
+async function cleanupTestData() {
+  // Remove fixture data left by previous verification runs.
+  // Foreign-key order matters: settlements before order items, children before parents.
+  const testEmails = ['teacher@testacademy.ac.ke', 'learner@testacademy.ac.ke']
+  const testInstitutionName = 'Test Academy Nairobi'
+
+  const userRows = await db.query(
+    'SELECT id FROM users WHERE email_normalized = ANY($1::text[])',
+    [testEmails]
+  )
+  const userIds = userRows.rows.map(r => r.id)
+
+  const instRows = await db.query(
+    'SELECT id FROM institutions WHERE name = $1',
+    [testInstitutionName]
+  )
+  const institutionIds = instRows.rows.map(r => r.id)
+
+  if (userIds.length === 0 && institutionIds.length === 0) return
+
+  log('CLEANUP START', { userCount: userIds.length, institutionCount: institutionIds.length })
+
+  await db.query('DELETE FROM inbox_recipients WHERE recipient_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM inbox_messages WHERE sender_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM wallet_ledger WHERE user_id = ANY($1::uuid[]) OR actor_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM wallet_accounts WHERE user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM teacher_payout_requests WHERE teacher_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM seller_settlements WHERE seller_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM marketplace_order_items WHERE seller_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM marketplace_orders WHERE buyer_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM marketplace_submissions WHERE teacher_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM audit_events WHERE actor_user_id = ANY($1::uuid[]) OR subject_user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM user_roles WHERE user_id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [userIds])
+  await db.query('DELETE FROM institutions WHERE id = ANY($1::text[])', [institutionIds])
+
+  log('CLEANUP DONE', { removedUsers: userIds.length, removedInstitutions: institutionIds.length })
+}
 
 async function createTestUser(fullName, email, password, role, institutionId = null) {
   const id = randomUUID()
@@ -116,6 +196,9 @@ async function createTestUser(fullName, email, password, role, institutionId = n
 }
 
 try {
+  // === STEP 0: Remove any leftover test fixtures ===
+  await cleanupTestData()
+
   // === STEP 1: Login as Platform Admin ===
   console.log('\n=== Starting End-to-End Verification ===\n')
   const adminCookie = await login('admin@guardianexams.local', 'GuardianAdmin2026!', 'Platform admin')
@@ -172,6 +255,11 @@ try {
   const submissionId = subRes.json.submission.id
   log('SUBMISSION CREATED (draft)', { status: subRes.status, submissionId, status: subRes.json.submission.status })
 
+  // Upload the print master (real PDF required before review)
+  const uploadRes = await uploadFile(`/api/teacher/marketplace-submissions/${submissionId}/file`, 'kcse-maths-paper1-sample.pdf', minimalPdf(), teacherCookie)
+  if (uploadRes.status !== 201) throw new Error(`Print master upload failed: ${uploadRes.json?.error?.message}`)
+  log('PRINT MASTER UPLOADED', { status: uploadRes.status, fileName: uploadRes.json.file?.fileName, fileSizeBytes: uploadRes.json.file?.fileSizeBytes })
+
   // Submit for review
   const submitRes = await api('POST', `/api/teacher/marketplace-submissions/${submissionId}/submit`, {}, teacherCookie)
   if (submitRes.status !== 200) throw new Error(`Submission send failed: ${submitRes.json?.error?.message}`)
@@ -198,7 +286,12 @@ try {
 
   // === STEP 7: Learner creates an order ===
   const productId = catalogRes.json.products[0].id
-  const orderRes = await api('POST', '/api/marketplace/orders', { productIds: [productId] }, learnerCookie)
+  const orderRes = await api('POST', '/api/marketplace/orders', {
+    productIds: [productId],
+    recipientName: 'Tom Learner',
+    recipientPhone: '+254712345678',
+    deliveryAddress: 'Test Academy Nairobi, Nairobi County, Kenya',
+  }, learnerCookie)
   if (orderRes.status !== 201) throw new Error(`Order creation failed: ${orderRes.json?.error?.message}`)
   const orderId = orderRes.json.order.id
   log('ORDER CREATED', { status: orderRes.status, orderId, totalKes: orderRes.json.order.totalKes, isSimulated: orderRes.json.order.isSimulatedPayment })
@@ -350,7 +443,6 @@ try {
   }
   console.log(`\n${allPassed ? 'ALL STEPS PASSED' : 'SOME STEPS FAILED'}`)
   console.log('\nNOTE: No real money was transferred. All payments and payouts are simulated.')
-  console.log('NOTE: The product records a sample filename only — there is no original PDF upload or fulfillment.')
 
 } catch (error) {
   console.error('\n!!! VERIFICATION ERROR !!!')
