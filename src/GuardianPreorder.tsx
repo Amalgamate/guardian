@@ -9,6 +9,15 @@ type MapSuggestion = { id: string; label: string }
 type PickupSample = 'main-stage' | 'parcel-counter' | ''
 const initialSchoolOrder: SchoolOrder = { school: '', contact: '', email: '', phone: '', county: '', town: '', address: '' }
 const money = (value: number) => `KSh ${Number(value || 0).toLocaleString('en-KE')}`
+const savedOrderDetailsKey = 'guardian-exams-preorder-details-v1'
+function readSavedOrderDetails(): SchoolOrder | null {
+  try {
+    const value = window.localStorage.getItem(savedOrderDetailsKey)
+    if (!value) return null
+    const parsed = JSON.parse(value) as Partial<SchoolOrder>
+    return { ...initialSchoolOrder, ...Object.fromEntries(Object.keys(initialSchoolOrder).map((key) => [key, typeof parsed[key as keyof SchoolOrder] === 'string' ? parsed[key as keyof SchoolOrder] : ''])) } as SchoolOrder
+  } catch { return null }
+}
 const localKenyanPhoneDigits = (value: string) => {
   let digits = value.replace(/\D/g, '')
   if (digits.startsWith('254')) digits = digits.slice(3)
@@ -22,7 +31,8 @@ const formatKenyanPhone = (value: string) => {
 
 export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<'grades' | 'delivery' | 'checkout' | 'waiting' | 'complete'>('grades')
-  const [order, setOrder] = useState<SchoolOrder>(initialSchoolOrder)
+  const [order, setOrder] = useState<SchoolOrder>(() => readSavedOrderDetails() || initialSchoolOrder)
+  const [rememberDetails, setRememberDetails] = useState(() => Boolean(readSavedOrderDetails()))
   const [countyOptions, setCountyOptions] = useState<string[]>([])
   const [townOptions, setTownOptions] = useState<string[]>([])
   const [countySearchLoading, setCountySearchLoading] = useState(false)
@@ -31,6 +41,8 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
   const [addressSearchLoading, setAddressSearchLoading] = useState(false)
   const [addressSearchMessage, setAddressSearchMessage] = useState('')
   const [pickupSample, setPickupSample] = useState<PickupSample>('')
+  const [locating, setLocating] = useState(false)
+  const [locationMessage, setLocationMessage] = useState('')
   const [prices, setPrices] = useState<GradePrice[]>([])
   const [deliveryFeeKes, setDeliveryFeeKes] = useState(300)
   const [quantities, setQuantities] = useState<Record<string, number>>({})
@@ -46,6 +58,13 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
   const subtotalKes = lines.reduce((sum, line) => sum + line.subtotalKes, 0)
   const liveTotalKes = subtotalKes + deliveryFeeKes
   const stageIndex = step === 'grades' ? 0 : step === 'delivery' ? 1 : 2
+
+  useEffect(() => {
+    try {
+      if (rememberDetails) window.localStorage.setItem(savedOrderDetailsKey, JSON.stringify(order))
+      else window.localStorage.removeItem(savedOrderDetailsKey)
+    } catch { /* The order can proceed when browser storage is disabled. */ }
+  }, [order, rememberDetails])
 
   useEffect(() => {
     let active = true
@@ -151,6 +170,40 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
 
   const setField = (field: keyof SchoolOrder, value: string) => setOrder((current) => ({ ...current, [field]: value }))
   const setQuantity = (gradeCode: string, value: number) => setQuantities((current) => ({ ...current, [gradeCode]: Math.max(0, Math.min(10000, Math.floor(value || 0))) }))
+  const useCurrentLocation = () => {
+    setLocationMessage('')
+    if (!navigator.geolocation) { setLocationMessage('Location is not available in this browser. You can enter your town and address manually.'); return }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      try {
+        const query = new URLSearchParams({ lat: String(coords.latitude), lon: String(coords.longitude), lang: 'en', zoom: '16' })
+        const response = await fetch(`https://photon.komoot.io/reverse?${query}`)
+        if (!response.ok) throw new Error('Map lookup failed')
+        const body = await response.json()
+        const place = body?.features?.[0]?.properties
+        if (!place || (String(place.countrycode || '').toLowerCase() !== 'ke' && place.country !== 'Kenya')) {
+          setLocationMessage('Your location could not be matched to a Kenyan address. Choose your county and town manually.')
+          return
+        }
+        const responseCounties = await fetch('/api/public/guardian-locations?type=counties')
+        const countyBody = await responseCounties.json()
+        const knownCounties: string[] = Array.isArray(countyBody.results) ? countyBody.results : countyOptions
+        const countyCandidate = String(place.county || place.state || '')
+        const county = knownCounties.find((name) => name.toLocaleLowerCase('en') === countyCandidate.toLocaleLowerCase('en')) || ''
+        const town = String(place.city || place.town || place.village || place.suburb || place.district || '')
+        const street = [place.housenumber, place.street].filter(Boolean).join(' ')
+        const address = [...new Set([place.name, street, place.neighbourhood, place.suburb].filter(Boolean).map(String))].join(', ')
+        setOrder((current) => ({ ...current, county: county || current.county, town: town || current.town, address: address || current.address }))
+        setPickupSample('')
+        setLocationMessage(county && town ? `Location filled for ${town}, ${county}. Please check the details.` : 'Address suggestion added. Please confirm your county and town.')
+      } catch {
+        setLocationMessage('We could not look up this location right now. You can enter your details manually.')
+      } finally { setLocating(false) }
+    }, (cause) => {
+      setLocating(false)
+      setLocationMessage(cause.code === cause.PERMISSION_DENIED ? 'Location permission was declined. You can enter your details manually.' : 'Could not get your location. Check device location settings or enter the address manually.')
+    }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 })
+  }
   const phoneIsValid = (value: string) => /^[17]\d{8}$/.test(localKenyanPhoneDigits(value))
   const startPayment = async () => {
     if (!savedOrder) return
@@ -193,6 +246,7 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
       </div><aside className="guardian-live-order-summary"><span className="guardian-live-summary-kicker">YOUR ORDER</span><h3>Order summary</h3><p>{totalStudents} students across {lines.length} {lines.length === 1 ? 'grade' : 'grades'}</p><div className="guardian-live-summary-lines">{lines.length ? lines.map((line) => <div key={line.gradeCode}><span>{line.gradeLabel}<small>{line.quantity} students × {money(line.unitPriceKes)}</small></span><b>{money(line.subtotalKes)}</b></div>) : <small className="guardian-summary-empty">Choose a grade and quantity to see your order here.</small>}</div><div className="guardian-live-summary-totals"><div><span>Exam packs</span><b>{money(subtotalKes)}</b></div><div><span>Delivery</span><b>{money(deliveryFeeKes)}</b></div><strong><span>Total</span><b aria-live="polite">{money(liveTotalKes)}</b></strong></div><button className="guardian-preorder-primary" disabled={loadingPrices || !prices.length || !lines.length} onClick={() => setStep('delivery')}>Continue <ArrowRight size={16}/></button><small className="guardian-live-summary-note">Final price is confirmed before payment.</small></aside></div>}
 
       {step === 'delivery' && <form className="guardian-preorder-form" onSubmit={(event) => { event.preventDefault(); void continueToCheckout() }}>
+        <div className="guardian-delivery-tools"><button type="button" className="guardian-use-location" onClick={useCurrentLocation} disabled={locating}>{locating ? 'Finding your location…' : <><MapPin size={15}/> Use my location</>}</button><small>Allow location access to suggest your Kenyan county, town and nearby address. You can edit all suggestions.</small>{locationMessage && <small className="guardian-location-message" role="status">{locationMessage}</small>}</div>
         <div className="guardian-preorder-fields">
           <label>School or institution<input required maxLength={160} value={order.school} onChange={(event) => setField('school', event.target.value)} placeholder="e.g. Greenfield Academy" autoComplete="organization"/></label>
           <label>Contact person<input required maxLength={120} value={order.contact} onChange={(event) => setField('contact', event.target.value)} placeholder="Full name" autoComplete="name"/></label>
@@ -204,6 +258,7 @@ export default function GuardianPreorder({ onClose }: { onClose: () => void }) {
           <label className="guardian-preorder-wide">{pickupSample ? 'Extra pickup directions (optional)' : `Delivery location in ${order.town || 'your selected town'}`}<span className="guardian-address-autocomplete"><input required={!pickupSample} maxLength={300} value={order.address} onChange={(event) => setField('address', event.target.value)} placeholder={pickupSample ? 'Optional: add a specific stage, landmark or directions' : `Search a street, building or landmark in ${order.town || 'your town'}`} autoComplete="street-address" aria-autocomplete="list" aria-controls="guardian-address-suggestions" aria-expanded={addressSuggestions.length > 0}/>{(addressSearchLoading || addressSuggestions.length > 0 || addressSearchMessage) && <div className="guardian-address-suggestions" id="guardian-address-suggestions" role="listbox" aria-label={`Address suggestions in ${order.town || 'selected town'}`}>{addressSearchLoading && <small className="guardian-address-status" aria-live="polite">Searching in {order.town || order.county}…</small>}{addressSuggestions.map((suggestion) => <button type="button" role="option" aria-selected="false" key={suggestion.id} onClick={() => { setField('address', suggestion.label); setAddressSuggestions([]); setAddressSearchMessage('') }}><MapPin size={15}/><span>{suggestion.label}</span></button>)}{!addressSearchLoading && addressSearchMessage && <small className="guardian-address-status" aria-live="polite">{addressSearchMessage}</small>}</div>}{!pickupSample && <small className="guardian-map-attribution">Map suggestions by Photon · © OpenStreetMap contributors</small>}</span></label>
           <aside className="guardian-routing-note"><MapPin size={17}/><span><strong>Collection points</strong><small>We’re adding collection points for {order.town || 'your town'}. Keep checking back for updates.</small></span></aside>
         </div>
+        <div className="guardian-remember-details"><label><input type="checkbox" checked={rememberDetails} onChange={(event) => setRememberDetails(event.target.checked)}/><span><strong>Remember my details on this device</strong><small>Saved only in this browser to make your next order faster.</small></span></label>{rememberDetails && <button type="button" onClick={() => { setRememberDetails(false); setOrder(initialSchoolOrder); setPickupSample('') }}>Clear saved details</button>}</div>
         {error && <small className="guardian-preorder-error" role="alert">{error}</small>}
         <div className="guardian-preorder-actions"><button type="button" className="guardian-preorder-secondary" onClick={() => { setError(''); setStep('grades') }}><ArrowLeft size={16}/> Back to grades</button><button className="guardian-preorder-primary" type="submit" disabled={submitting}>{submitting ? 'Preparing checkout…' : <>Continue to checkout <ArrowRight size={16}/></>}</button></div>
       </form>}

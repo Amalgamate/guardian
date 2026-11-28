@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
+import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash, createCipheriv, createDecipheriv, hkdfSync } from 'node:crypto'
 import { promisify } from 'node:util'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { createDatabase } from './db.mjs'
 import { resendReady, sendGuardianOtp, sendGuardianOrderReceipt, sendGuardianWelcome } from './email.mjs'
 import { mobileSasaReady, sendGuardianOtpSms, sendGuardianPaymentReceiptSms } from './sms.mjs'
-import { darajaConfig, DarajaRequestError, initiateStkPush, normalizeMpesaPhone } from './daraja.mjs'
+import { darajaConfig, setDarajaAdminCredentials, DarajaRequestError, initiateStkPush, normalizeMpesaPhone } from './daraja.mjs'
 import { handleAcademicStructureRequest } from './academicStructureRoutes.mjs'
 import { searchKenyaLocations } from './kenyaLocations.mjs'
 
@@ -75,6 +75,42 @@ const q = {
 const buckets = new Map()
 const authSecret = process.env.AUTH_OTP_PEPPER || randomBytes(32).toString('hex')
 if (isProduction && !process.env.AUTH_OTP_PEPPER) throw new Error('Set AUTH_OTP_PEPPER to a stable secret of at least 32 random bytes in production.')
+
+function integrationCredentialKey() {
+  const pepper = process.env.AUTH_OTP_PEPPER
+  if (!pepper || Buffer.byteLength(pepper) < 32) return null
+  return Buffer.from(hkdfSync('sha256', Buffer.from(pepper), Buffer.from('guardian-exams-integrations'), Buffer.from('mpesa-daraja-admin-credentials-v1'), 32))
+}
+function encryptIntegrationCredentials(value) {
+  const key = integrationCredentialKey()
+  if (!key) fail(503, 'CREDENTIAL_ENCRYPTION_UNAVAILABLE', 'Credential storage is not ready. Configure a stable AUTH_OTP_PEPPER of at least 32 bytes on the server.')
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
+  return `${iv.toString('base64url')}.${ciphertext.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}`
+}
+function decryptIntegrationCredentials(value) {
+  const key = integrationCredentialKey()
+  if (!key) return null
+  try {
+    const [ivText, ciphertextText, tagText] = String(value).split('.')
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivText, 'base64url'))
+    decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
+    return JSON.parse(Buffer.concat([decipher.update(Buffer.from(ciphertextText, 'base64url')), decipher.final()]).toString('utf8'))
+  } catch { return null }
+}
+async function loadAdminDarajaCredentials() {
+  const row = await db.one("SELECT encrypted_config FROM admin_integration_credentials WHERE provider='mpesa_daraja'")
+  if (!row) return false
+  const credentials = decryptIntegrationCredentials(row.encrypted_config)
+  if (!credentials) {
+    console.error('Saved M-PESA admin credentials could not be decrypted. Check that AUTH_OTP_PEPPER is unchanged and stable.')
+    return false
+  }
+  setDarajaAdminCredentials(credentials)
+  return true
+}
+let adminDarajaCredentialsSaved = await loadAdminDarajaCredentials()
 
 await bootstrapPlatformAdmin()
 
@@ -829,6 +865,39 @@ async function router(request, response) {
     return sendJson(response, 200, { ResultCode: 0, ResultDesc: 'Accepted' })
   }
 
+  if (method === 'POST' && path === '/api/admin/integrations/mpesa') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    rateLimit(request, 'admin-mpesa-credentials', 5, 10 * 60_000, auth.user.id)
+    const current = darajaConfig()
+    const clean = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : ''
+    const environment = payload.environment === 'production' ? 'production' : payload.environment === 'sandbox' ? 'sandbox' : ''
+    if (!environment) fail(400, 'MPESA_ENVIRONMENT_INVALID', 'Choose sandbox or production.')
+    if (environment === 'production' && payload.confirmProduction !== true) fail(400, 'MPESA_PRODUCTION_CONFIRMATION_REQUIRED', 'Confirm that you intend to enable live M-PESA payments.')
+    const credentials = {
+      environment,
+      consumerKey: clean(payload.consumerKey, 500) || current.consumerKey,
+      consumerSecret: clean(payload.consumerSecret, 2000) || current.consumerSecret,
+      shortcode: clean(payload.shortcode, 12) || current.shortcode,
+      passkey: clean(payload.passkey, 2000) || current.passkey,
+      callbackUrl: clean(payload.callbackUrl, 500).replace(/\/+$/, '') || current.callbackUrl,
+      callbackSecret: clean(payload.callbackSecret, 128) || current.callbackSecret,
+    }
+    if (!credentials.consumerKey || !credentials.consumerSecret || !/^\d{5,12}$/.test(credentials.shortcode) || !credentials.passkey) fail(400, 'MPESA_CREDENTIALS_REQUIRED', 'Enter the consumer key, consumer secret, shortcode and passkey.')
+    let callback
+    try { callback = new URL(credentials.callbackUrl) } catch { fail(400, 'MPESA_CALLBACK_INVALID', 'Enter the public HTTPS callback URL ending in /api/mpesa/callback.') }
+    if (callback.protocol !== 'https:' || callback.search || callback.hash || !callback.pathname.endsWith('/api/mpesa/callback')) fail(400, 'MPESA_CALLBACK_INVALID', 'Use a public HTTPS callback URL ending in /api/mpesa/callback, with no query string.')
+    if (!/^[A-Za-z0-9_-]{32,128}$/.test(credentials.callbackSecret)) fail(400, 'MPESA_CALLBACK_SECRET_INVALID', 'Callback secret must be 32–128 letters, numbers, underscores or hyphens.')
+    const encryptedConfig = encryptIntegrationCredentials(credentials)
+    await prepare(`INSERT INTO admin_integration_credentials(provider,encrypted_config,updated_by,updated_at)
+      VALUES('mpesa_daraja',?,?,?) ON CONFLICT(provider) DO UPDATE SET encrypted_config=EXCLUDED.encrypted_config,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at`)
+      .run(encryptedConfig, auth.user.id, now())
+    setDarajaAdminCredentials(credentials)
+    adminDarajaCredentialsSaved = true
+    await audit('admin.mpesa_credentials_updated', null, auth.user.id, { environment, callbackHost: callback.host })
+    return sendJson(response, 200, { message: `Safaricom M-PESA ${environment} credentials saved securely.`, integrations: { mpesa: { provider: 'Safaricom Daraja', ready: darajaConfig().ready, configured: darajaConfig().configured, environment, callbackReady: true, credentialsSaved: true } } })
+  }
+
   if (method === 'GET' && path === '/api/admin/integrations') {
     const auth = await getAuth(request)
     requireRole(auth, ['Platform admin'])
@@ -836,7 +905,7 @@ async function router(request, response) {
     return sendJson(response, 200, { integrations: {
       email: { provider: otpDelivery === 'resend' ? 'Resend' : 'Console', ready: otpDelivery === 'resend' && resendReady() },
       sms: { provider: 'MobileSasa', ready: mobileSasaReady() },
-      mpesa: { provider: 'Safaricom Daraja', ready: mpesa.ready, environment: mpesa.ready ? mpesa.environment : 'not configured', callbackReady: Boolean(mpesa.callbackUrl.startsWith('https://') && mpesa.callbackSecret.length >= 32) },
+      mpesa: { provider: 'Safaricom Daraja', ready: mpesa.ready, configured: mpesa.configured, environment: mpesa.configured ? mpesa.environment : 'not configured', callbackReady: Boolean(mpesa.callbackUrl.startsWith('https://') && mpesa.callbackSecret.length >= 32), credentialsSaved: adminDarajaCredentialsSaved, credentialStorageReady: Boolean(integrationCredentialKey()) },
     } })
   }
 

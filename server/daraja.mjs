@@ -1,18 +1,26 @@
 const accessTokens = new Map()
+let adminCredentialOverride = null
+
+export function setDarajaAdminCredentials(credentials) {
+  adminCredentialOverride = credentials ? { ...credentials } : null
+  accessTokens.clear()
+}
 
 export function darajaConfig() {
-  const environment = process.env.MPESA_ENVIRONMENT || 'sandbox'
+  const source = adminCredentialOverride || {}
+  const environment = source.environment || process.env.MPESA_ENVIRONMENT || 'sandbox'
   const config = {
     environment,
     baseUrl: environment === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke',
-    consumerKey: process.env.MPESA_CONSUMER_KEY || '',
-    consumerSecret: process.env.MPESA_CONSUMER_SECRET || '',
-    shortcode: process.env.MPESA_SHORTCODE || '',
-    passkey: process.env.MPESA_PASSKEY || '',
-    callbackUrl: process.env.MPESA_CALLBACK_URL || '',
-    callbackSecret: process.env.MPESA_CALLBACK_SECRET || '',
+    consumerKey: source.consumerKey || process.env.MPESA_CONSUMER_KEY || '',
+    consumerSecret: source.consumerSecret || process.env.MPESA_CONSUMER_SECRET || '',
+    shortcode: source.shortcode || process.env.MPESA_SHORTCODE || '',
+    passkey: source.passkey || process.env.MPESA_PASSKEY || '',
+    callbackUrl: source.callbackUrl || process.env.MPESA_CALLBACK_URL || '',
+    callbackSecret: source.callbackSecret || process.env.MPESA_CALLBACK_SECRET || '',
   }
-  return { ...config, ready: ['sandbox', 'production'].includes(environment) && Boolean(config.consumerKey && config.consumerSecret && config.shortcode && config.passkey && config.callbackUrl.startsWith('https://') && config.callbackSecret.length >= 32) }
+  const configured = Boolean(config.consumerKey && config.consumerSecret && config.shortcode && config.passkey)
+  return { ...config, configured, ready: ['sandbox', 'production'].includes(environment) && configured && Boolean(config.callbackUrl.startsWith('https://') && config.callbackSecret.length >= 32) }
 }
 
 export class DarajaRequestError extends Error {
