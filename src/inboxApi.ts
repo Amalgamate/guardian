@@ -9,7 +9,7 @@ export type InboxMessage = {
   senderId: string | null
   senderName: string | null
 }
-export type InboxRecipient = { id: string; fullName: string; email: string | null; phone: string | null; roles: string[] }
+export type InboxRecipient = { id: string; fullName: string; email: string | null; phone: string | null; status: string; roles: string[] }
 
 export class InboxApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) { super(message); this.name = 'InboxApiError' }

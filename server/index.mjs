@@ -359,6 +359,10 @@ async function findUser(identifier) {
 }
 async function activeContext(userId, role, institutionId = null) {
   if (!roles.includes(role) || !await q.role.get(userId, role, institutionId)) fail(403, 'ROLE_NOT_ASSIGNED', 'This account is not assigned to the selected role or institution.')
+  if (institutionId) {
+    const institution = await prepare('SELECT status FROM institutions WHERE id=?').get(institutionId)
+    if (institution && institution.status !== 'active') fail(403, 'INSTITUTION_SUSPENDED', 'This institution workspace is paused. Contact your school administrator or support.')
+  }
   return { role, institutionId, permissions: rolePermissions[role] }
 }
 async function issueChallenge({ user, purpose, channel, invitationId = null }) {
@@ -604,13 +608,39 @@ async function router(request, response) {
         JOIN institutions i ON i.id=a.institution_id JOIN users u ON u.id=a.teacher_user_id ORDER BY q.created_at DESC,q.position LIMIT 1000`).all()
       return sendJson(response, 200, { questions, source: 'assessment_questions', independentlyReusable: false })
     }
+    const includeArchived = url.searchParams.get('archived') === 'true'
+    const archiveFilter = includeArchived ? 'IS NOT NULL' : 'IS NULL'
     const orders = await prepare(`SELECT o.id,o.status,o.total_kes AS "totalKes",o.delivery_fee_kes AS "deliveryFeeKes",o.recipient_name AS "recipientName",o.recipient_phone AS "recipientPhone",o.delivery_address AS "deliveryAddress",o.fulfillment_status AS "fulfillmentStatus",o.carrier_name AS "carrierName",o.tracking_code AS "trackingCode",o.tracking_url AS "trackingUrl",o.payment_method AS "paymentMethod",o.payment_reference AS "paymentReference",
-      o.is_simulated_payment AS "isSimulatedPayment",o.created_at AS "createdAt",o.paid_at AS "paidAt",u.full_name AS "buyerName",u.email AS "buyerEmail",
+      o.is_simulated_payment AS "isSimulatedPayment",o.created_at AS "createdAt",o.paid_at AS "paidAt",o.archived_at AS "archivedAt",u.full_name AS "buyerName",u.email AS "buyerEmail",
       COALESCE(json_agg(json_build_object('id',oi.id,'submissionId',oi.submission_id,'title',oi.title_snapshot,'unitPriceKes',oi.unit_price_kes,'quantity',oi.quantity,'productType',oi.product_type,'fileName',oi.file_name_snapshot,'hasPrintMaster',oi.file_storage_key_snapshot IS NOT NULL,'sellerAmountKes',oi.seller_amount_kes,'platformAmountKes',oi.platform_amount_kes))
         FILTER (WHERE oi.id IS NOT NULL),'[]'::json) AS items
       FROM marketplace_orders o JOIN users u ON u.id=o.buyer_user_id LEFT JOIN marketplace_order_items oi ON oi.order_id=o.id
+      WHERE o.archived_at ${archiveFilter}
       GROUP BY o.id,u.full_name,u.email ORDER BY o.created_at DESC LIMIT 1000`).all()
     return sendJson(response, 200, { orders })
+  }
+
+  if (method === 'POST' && path === '/api/admin/marketplace-orders/archive-simulated') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (payload.confirm !== true) fail(400, 'MARKETPLACE_ORDER_ARCHIVE_CONFIRM_REQUIRED', 'Confirm clearing simulated marketplace orders.')
+    const result = await db.query(`UPDATE marketplace_orders SET archived_at=$1,archived_by=$2,updated_at=$1
+      WHERE archived_at IS NULL AND is_simulated_payment=true RETURNING id`, [now(), auth.user.id])
+    await audit('admin.marketplace_simulated_orders_archived', null, auth.user.id, { count: result.rowCount })
+    return sendJson(response, 200, { archivedCount: result.rowCount, message: `${result.rowCount} simulated marketplace order(s) moved out of the active list.` })
+  }
+
+  const marketplaceArchiveMatch = path.match(/^\/api\/admin\/marketplace-orders\/([0-9a-f-]{36})\/archive$/i)
+  if (method === 'PATCH' && marketplaceArchiveMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (typeof payload.archived !== 'boolean') fail(400, 'MARKETPLACE_ORDER_ARCHIVE_ACTION_INVALID', 'Choose whether to archive or restore this order.')
+    const archiveTime = payload.archived ? now() : null
+    const order = await prepare(`UPDATE marketplace_orders SET archived_at=?,archived_by=?,updated_at=? WHERE id=? RETURNING id,archived_at AS "archivedAt"`)
+      .get(archiveTime, payload.archived ? auth.user.id : null, now(), marketplaceArchiveMatch[1])
+    if (!order) fail(404, 'MARKETPLACE_ORDER_NOT_FOUND', 'That marketplace order was not found.')
+    await audit(payload.archived ? 'admin.marketplace_order_archived' : 'admin.marketplace_order_restored', null, auth.user.id, { orderId: order.id })
+    return sendJson(response, 200, { order, message: payload.archived ? 'Marketplace order archived from the active list.' : 'Marketplace order restored to the active list.' })
   }
 
   const marketplaceFulfillmentMatch = path.match(/^\/api\/admin\/marketplace-orders\/([0-9a-f-]+)\/fulfillment$/i)
@@ -745,8 +775,36 @@ async function router(request, response) {
   if (method === 'GET' && path === '/api/admin/guardian-exam-orders') {
     const auth = await getAuth(request)
     requireRole(auth, ['Platform admin'])
-    const orders = await prepare(`SELECT id,school_name AS "schoolName",contact_name AS "contactName",email,contact_phone AS "contactPhone",county,town,delivery_address AS "deliveryAddress",grades_snapshot AS grades,total_students AS "totalStudents",subtotal_kes AS "subtotalKes",delivery_fee_kes AS "deliveryFeeKes",total_kes AS "totalKes",status,payer_phone AS "payerPhone",payment_reference AS "paymentReference",payment_error AS "paymentError",created_at AS "createdAt",paid_at AS "paidAt" FROM guardian_exam_orders ORDER BY created_at DESC LIMIT 500`).all()
+    const includeArchived = url.searchParams.get('archived') === 'true'
+    const archiveFilter = includeArchived ? 'IS NOT NULL' : 'IS NULL'
+    const orders = await prepare(`SELECT id,school_name AS "schoolName",contact_name AS "contactName",email,contact_phone AS "contactPhone",county,town,delivery_address AS "deliveryAddress",grades_snapshot AS grades,total_students AS "totalStudents",subtotal_kes AS "subtotalKes",delivery_fee_kes AS "deliveryFeeKes",total_kes AS "totalKes",status,payer_phone AS "payerPhone",payment_reference AS "paymentReference",payment_error AS "paymentError",created_at AS "createdAt",paid_at AS "paidAt",archived_at AS "archivedAt" FROM guardian_exam_orders WHERE archived_at ${archiveFilter} ORDER BY created_at DESC LIMIT 500`).all()
     return sendJson(response, 200, { orders })
+  }
+
+  if (method === 'POST' && path === '/api/admin/guardian-exam-orders/archive-inactive') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (payload.confirm !== true) fail(400, 'GUARDIAN_ORDER_ARCHIVE_CONFIRM_REQUIRED', 'Confirm clearing inactive school preorders.')
+    const result = await db.query(`UPDATE guardian_exam_orders SET archived_at=$1,archived_by=$2,updated_at=$1
+      WHERE archived_at IS NULL AND status IN ('awaiting_payment','payment_failed','cancelled') RETURNING id`, [now(), auth.user.id])
+    await audit('admin.guardian_exam_orders_archived_inactive', null, auth.user.id, { count: result.rowCount })
+    return sendJson(response, 200, { archivedCount: result.rowCount, message: `${result.rowCount} inactive school preorder(s) moved out of the active list.` })
+  }
+
+  const guardianOrderArchiveMatch = path.match(/^\/api\/admin\/guardian-exam-orders\/([0-9a-f-]{36})\/archive$/i)
+  if (method === 'PATCH' && guardianOrderArchiveMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (typeof payload.archived !== 'boolean') fail(400, 'GUARDIAN_ORDER_ARCHIVE_ACTION_INVALID', 'Choose whether to archive or restore this preorder.')
+    const archiveTime = payload.archived ? now() : null
+    const order = await db.transaction(async (tx) => {
+      const current = await tx.one('SELECT id,status FROM guardian_exam_orders WHERE id=$1 FOR UPDATE', [guardianOrderArchiveMatch[1]])
+      if (!current) fail(404, 'GUARDIAN_ORDER_NOT_FOUND', 'That school preorder was not found.')
+      if (payload.archived && ['payment_pending','payment_review'].includes(current.status)) fail(409, 'GUARDIAN_ORDER_PAYMENT_ACTIVE', 'Orders with an active payment or payment review cannot be archived.')
+      return tx.one(`UPDATE guardian_exam_orders SET archived_at=$1,archived_by=$2,updated_at=$3 WHERE id=$4 RETURNING id,archived_at AS "archivedAt"`, [archiveTime, payload.archived ? auth.user.id : null, now(), current.id])
+    })
+    await audit(payload.archived ? 'admin.guardian_exam_order_archived' : 'admin.guardian_exam_order_restored', null, auth.user.id, { orderId: order.id })
+    return sendJson(response, 200, { order, message: payload.archived ? 'School preorder archived from the active list.' : 'School preorder restored to the active list.' })
   }
 
   const guardianOrderReviewMatch = path.match(/^\/api\/admin\/guardian-exam-orders\/([0-9a-f-]+)\/review$/i)
@@ -1824,6 +1882,25 @@ async function router(request, response) {
     return sendJson(response, 200, { users: rows.map((row) => ({ ...row, roles: row.roleNames ? row.roleNames.split('|') : [] })) })
   }
 
+  const adminUserStatusMatch = path.match(/^\/api\/admin\/users\/([0-9a-f-]+)\/status$/i)
+  if (method === 'PATCH' && adminUserStatusMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const userId = adminUserStatusMatch[1]
+    const status = payload.status
+    if (!['active', 'suspended'].includes(status)) fail(400, 'USER_STATUS_INVALID', 'Choose active or suspended.')
+    if (auth.user.id === userId && status === 'suspended') fail(409, 'SELF_SUSPENSION_BLOCKED', 'You cannot suspend your own account.')
+    const updated = await db.transaction(async (tx) => {
+      const user = await tx.one(`UPDATE users SET status=$1,updated_at=$2 WHERE id=$3 RETURNING id,full_name AS "fullName",status`, [status, now(), userId])
+      if (!user) fail(404, 'USER_NOT_FOUND', 'That account was not found.')
+      if (status === 'suspended') await tx.query('DELETE FROM sessions WHERE user_id=$1', [userId])
+      await tx.query(`INSERT INTO audit_events(id,actor_user_id,subject_user_id,action,details_json,created_at) VALUES($1,$2,$3,$4,$5::jsonb,$6)`,
+        [randomUUID(), auth.user.id, userId, `admin.user_${status === 'active' ? 'reactivated' : 'suspended'}`, JSON.stringify({ previousStatus: status === 'active' ? 'suspended' : 'active' }), now()])
+      return user
+    })
+    return sendJson(response, 200, { user: updated, message: status === 'suspended' ? 'Account suspended and all active sessions revoked.' : 'Account reactivated. The user can sign in again.' })
+  }
+
   if (method === 'GET' && path === '/api/admin/marketplace-submissions') {
     const auth = await getAuth(request)
     requireRole(auth, ['Platform admin'])
@@ -1964,6 +2041,27 @@ async function router(request, response) {
     const institutions = await prepare(`SELECT id,name,institution_type AS "institutionType",registration_number AS "registrationNumber",county,town,contact_email AS "contactEmail",
       contact_phone AS "contactPhone",status,created_at AS "createdAt" FROM institutions ORDER BY created_at DESC LIMIT 500`).all()
     return sendJson(response, 200, { institutions })
+  }
+
+  const adminInstitutionStatusMatch = path.match(/^\/api\/admin\/institutions\/([^/]+)\/status$/i)
+  if (method === 'PATCH' && adminInstitutionStatusMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const institutionId = decodeURIComponent(adminInstitutionStatusMatch[1])
+    const status = payload.status
+    if (!['active', 'suspended'].includes(status)) fail(400, 'INSTITUTION_STATUS_INVALID', 'Choose active or suspended.')
+    const updated = await db.transaction(async (tx) => {
+      const institution = await tx.one(`UPDATE institutions SET status=$1,updated_at=$2 WHERE id=$3 RETURNING id,name,status`, [status, now(), institutionId])
+      if (!institution) fail(404, 'INSTITUTION_NOT_FOUND', 'That institution was not found.')
+      if (status === 'suspended') {
+        await tx.query('DELETE FROM sessions WHERE institution_id=$1', [institutionId])
+        await tx.query('DELETE FROM role_invitations WHERE institution_id=$1 AND accepted_at IS NULL', [institutionId])
+      }
+      await tx.query(`INSERT INTO audit_events(id,actor_user_id,action,details_json,created_at) VALUES($1,$2,$3,$4::jsonb,$5)`,
+        [randomUUID(), auth.user.id, `admin.institution_${status === 'active' ? 'reactivated' : 'suspended'}`, JSON.stringify({ institutionId, name: institution.name }), now()])
+      return institution
+    })
+    return sendJson(response, 200, { institution: updated, message: status === 'suspended' ? 'Institution suspended. Sessions and unused invitations for this school were revoked.' : 'Institution reactivated. Its members can use the school workspace again.' })
   }
 
   if (method === 'GET' && path === '/api/admin/institution-applications') {
