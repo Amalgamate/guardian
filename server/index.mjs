@@ -10,6 +10,7 @@ import { mobileSasaReady, sendGuardianOtpSms, sendGuardianPaymentReceiptSms } fr
 import { darajaConfig, setDarajaAdminCredentials, DarajaRequestError, initiateStkPush, normalizeMpesaPhone } from './daraja.mjs'
 import { handleAcademicStructureRequest } from './academicStructureRoutes.mjs'
 import { searchKenyaLocations } from './kenyaLocations.mjs'
+import { checkInstitutionDeletion, checkUserDeletion, previewStudentActivityReset, purgeInstitution, purgeUser, resetStudentActivity } from './deletion.mjs'
 
 const scrypt = promisify(scryptCallback)
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -1882,6 +1883,33 @@ async function router(request, response) {
     return sendJson(response, 200, { users: rows.map((row) => ({ ...row, roles: row.roleNames ? row.roleNames.split('|') : [] })) })
   }
 
+  const adminUserDeleteCheckMatch = path.match(/^\/api\/admin\/users\/([0-9a-f-]+)\/deletion$/i)
+  if (method === 'GET' && adminUserDeleteCheckMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const report = await db.transaction((tx) => checkUserDeletion(tx, adminUserDeleteCheckMatch[1]))
+    if (!report) fail(404, 'USER_NOT_FOUND', 'That account was not found.')
+    const isSelf = auth.user.id === adminUserDeleteCheckMatch[1]
+    return sendJson(response, 200, {
+      ...report,
+      blockers: isSelf ? [{ code: 'SELF_DELETION_BLOCKED', count: 1, message: 'You cannot delete the account you are signed in with.' }, ...report.blockers] : report.blockers,
+      deletable: report.deletable && !isSelf,
+    })
+  }
+
+  const adminUserMatch = path.match(/^\/api\/admin\/users\/([0-9a-f-]+)$/i)
+  if (method === 'DELETE' && adminUserMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const userId = adminUserMatch[1]
+    if (auth.user.id === userId) fail(409, 'SELF_DELETION_BLOCKED', 'You cannot delete the account you are signed in with.')
+    if (payload.confirm !== true) fail(400, 'DELETION_CONFIRMATION_REQUIRED', 'Confirm permanent deletion before continuing.')
+    const deleted = await db.transaction((tx) => purgeUser(tx, { userId, actorUserId: auth.user.id }))
+    if (!deleted) fail(404, 'USER_NOT_FOUND', 'That account was not found.')
+    await audit('admin.user_deleted', null, auth.user.id, { deletedUserId: userId, ...deleted.detail })
+    return sendJson(response, 200, { deleted: { id: userId, ...deleted.detail }, message: `${deleted.snapshot} was permanently deleted.` })
+  }
+
   const adminUserStatusMatch = path.match(/^\/api\/admin\/users\/([0-9a-f-]+)\/status$/i)
   if (method === 'PATCH' && adminUserStatusMatch) {
     const auth = await getAuth(request)
@@ -2043,6 +2071,30 @@ async function router(request, response) {
     return sendJson(response, 200, { institutions })
   }
 
+  const adminInstitutionDeleteCheckMatch = path.match(/^\/api\/admin\/institutions\/([^/]+)\/deletion$/i)
+  if (method === 'GET' && adminInstitutionDeleteCheckMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const report = await db.transaction((tx) => checkInstitutionDeletion(tx, decodeURIComponent(adminInstitutionDeleteCheckMatch[1])))
+    if (!report) fail(404, 'INSTITUTION_NOT_FOUND', 'That institution was not found.')
+    return sendJson(response, 200, report)
+  }
+
+  const adminInstitutionMatch = path.match(/^\/api\/admin\/institutions\/([^/]+)$/i)
+  if (method === 'DELETE' && adminInstitutionMatch) {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (payload.confirm !== true) fail(400, 'DELETION_CONFIRMATION_REQUIRED', 'Confirm permanent deletion before continuing.')
+    const institutionId = decodeURIComponent(adminInstitutionMatch[1])
+    const deleted = await db.transaction((tx) => purgeInstitution(tx, { institutionId }))
+    if (!deleted) fail(404, 'INSTITUTION_NOT_FOUND', 'That institution was not found.')
+    await audit('admin.institution_deleted', null, auth.user.id, { institutionId, name: deleted.name, membershipsRemoved: deleted.membershipsRemoved })
+    return sendJson(response, 200, {
+      deleted: { id: institutionId, name: deleted.name, membershipsRemoved: deleted.membershipsRemoved },
+      message: `${deleted.name} was permanently deleted. ${deleted.membershipsRemoved} membership(s) were removed; the accounts themselves were kept.`,
+    })
+  }
+
   const adminInstitutionStatusMatch = path.match(/^\/api\/admin\/institutions\/([^/]+)\/status$/i)
   if (method === 'PATCH' && adminInstitutionStatusMatch) {
     const auth = await getAuth(request)
@@ -2122,6 +2174,26 @@ async function router(request, response) {
       contact_phone AS "contactPhone",status,created_at AS "createdAt"`).get(name, institutionType, county, contactEmail, contactPhone, auth.user.id)
     await audit('admin.institution_created', null, auth.user.id, { institutionId: institution.id, institutionType })
     return sendJson(response, 201, { institution })
+  }
+
+  if (method === 'GET' && path === '/api/admin/data-reset') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    const preview = await db.transaction((tx) => previewStudentActivityReset(tx))
+    return sendJson(response, 200, preview)
+  }
+
+  if (method === 'POST' && path === '/api/admin/data-reset') {
+    const auth = await getAuth(request)
+    requireRole(auth, ['Platform admin'])
+    if (payload.confirm !== true) fail(400, 'DELETION_CONFIRMATION_REQUIRED', 'Confirm the reset before continuing.')
+    const result = await db.transaction((tx) => resetStudentActivity(tx, { actorUserId: auth.user.id }))
+    if (result.alreadyClear) return sendJson(response, 200, { result, message: 'There was no student activity to clear.' })
+    await audit('admin.student_activity_reset', null, auth.user.id, result)
+    return sendJson(response, 200, {
+      result,
+      message: `Cleared ${result.attemptsRemoved} assessment attempt(s), ${result.familyLinksRemoved} family link(s) and ${result.messagesRemoved} inbox message(s). Archived ${result.ordersArchived + result.preordersArchived} unfinished checkout(s). Paid orders, accounts and schools were not changed.`,
+    })
   }
 
   if (method === 'GET' && path === '/api/admin/parent-links') {

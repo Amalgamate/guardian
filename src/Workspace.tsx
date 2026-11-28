@@ -15,6 +15,7 @@ import WhatsAppPreferences from './WhatsAppPreferences'
 import { authApi, type AuthSession, type UserRole } from './authApi'
 import ConnectedAdminOverview from './ConnectedAdminOverview'
 import ConnectedAdminUsers, { ConnectedAdminInstitutions } from './ConnectedAdminUsers'
+import ConnectedAdminDataReset from './ConnectedAdminDataReset'
 import ConnectedIntegrations from './ConnectedIntegrations'
 import ConnectedGuardianExamPricing from './ConnectedGuardianExamPricing'
 import AdminAcademicStructure from './AdminAcademicStructure'
@@ -48,7 +49,7 @@ const adminNavGroups = [
   { title: 'LEARNING & CONTENT', items: ['Examinations', 'Content library', 'Question bank'] },
   { title: 'INSIGHTS & MESSAGES', items: ['Reports & analytics', 'Notifications', 'Inbox', 'Support'] },
 ]
-const adminSettingsNav = ['Academic structure', 'Exam pricing', 'Payments', 'Subscriptions', 'CMS', 'Settings']
+const adminSettingsNav = ['Academic structure', 'Exam pricing', 'Payments', 'Subscriptions', 'CMS', 'Data reset', 'Settings']
 const adminPageIntent: Record<string, string> = {
   Overview: 'Monitor platform activity and work through items that need an administrator decision.',
   'User management': 'Find accounts, grant or revoke roles, and invite staff to the right institution.',
@@ -64,6 +65,7 @@ const adminPageIntent: Record<string, string> = {
   'Exam pricing': 'Edit the Guardian Exams per-student grade pack prices and delivery fee, then review school orders.',
   Subscriptions: 'Configure plan definitions; billing and access entitlements are separate workflows.',
   'Reports & analytics': 'Review connected platform counts and export records for operational review.',
+  'Data reset': 'Clear learner attempts, marks and unfinished checkouts for testing. Accounts, schools and paid orders are never touched.',
   Notifications: 'Send in-app announcements and review the messages delivered to platform users.',
   Inbox: 'Send announcements, reply to support requests and review user conversations.',
   CMS: 'Update customer-facing website content and preview changes before publishing.',
@@ -145,6 +147,7 @@ export default function Workspace({ onMarketplace, onLogout, session }: { onMark
     if (['Content library', 'Question bank', 'Examinations', 'Orders & commerce', 'Reports & analytics'].includes(page)) return <>{purpose}<AdminOperationsScreens page={page as AdminOperationsPage} onNavigate={setPage}/></>
     if (page === 'CMS' || page === 'Subscriptions') return <>{purpose}<AdminPlatformPages page={page as AdminPlatformPage} onNotify={notify}/></>
     if (page === 'Notifications' || page === 'Support') return <>{purpose}<ConnectedInboxCenter admin currentUserId={session.user.id} onNotify={notify}/></>
+    if (page === 'Data reset') return <>{purpose}<ConnectedAdminDataReset/></>
     if (page === 'Settings') return <>{purpose}<section className="ws-card ws-admin-settings"><h2>Platform settings</h2><p>Operational settings are managed in connected service screens. Changes require an audited workflow.</p><div><button className="ws-button ws-light" onClick={() => setPage('Payments')}>Payment providers <ArrowRight size={14}/></button><button className="ws-button ws-light" onClick={() => setPage('CMS')}>Public website content <ArrowRight size={14}/></button><button className="ws-button ws-light" onClick={() => setPage('Subscriptions')}>Subscription plans <ArrowRight size={14}/></button></div><small>No local sample values are shown here.</small></section></>
     return null
   })()
