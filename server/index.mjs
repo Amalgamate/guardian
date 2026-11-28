@@ -9,6 +9,7 @@ import { resendReady, sendGuardianOtp, sendGuardianOrderReceipt, sendGuardianWel
 import { mobileSasaReady, sendGuardianOtpSms, sendGuardianPaymentReceiptSms } from './sms.mjs'
 import { darajaConfig, DarajaRequestError, initiateStkPush, normalizeMpesaPhone } from './daraja.mjs'
 import { handleAcademicStructureRequest } from './academicStructureRoutes.mjs'
+import { searchKenyaLocations } from './kenyaLocations.mjs'
 
 const scrypt = promisify(scryptCallback)
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -605,6 +606,16 @@ async function router(request, response) {
     const grades = await prepare(`SELECT grade_code AS "gradeCode",grade_label AS "gradeLabel",unit_price_kes AS "unitPriceKes" FROM guardian_exam_pricing ORDER BY CASE grade_code WHEN 'PG' THEN 0 WHEN 'PP1' THEN 1 WHEN 'PP2' THEN 2 ELSE 3 END,grade_code`).all()
     const delivery = await prepare(`SELECT setting_value AS "deliveryFeeKes" FROM guardian_exam_settings WHERE setting_key='delivery_fee_kes'`).get()
     return sendJson(response, 200, { grades, deliveryFeeKes: Number(delivery?.deliveryFeeKes ?? 300), currency: 'KES' })
+  }
+
+  if (method === 'GET' && path === '/api/public/guardian-locations') {
+    const type = url.searchParams.get('type') || 'counties'
+    const query = (url.searchParams.get('q') || '').trim().slice(0, 80)
+    const county = (url.searchParams.get('county') || '').trim().slice(0, 100)
+    const results = searchKenyaLocations(type, county, query)
+    if (!results) fail(400, 'LOCATION_TYPE_INVALID', 'Choose counties or towns for location search.')
+    response.setHeader('Cache-Control', 'public, max-age=300')
+    return sendJson(response, 200, { results })
   }
 
   if (method === 'POST' && path === '/api/public/guardian-exam-orders') {
